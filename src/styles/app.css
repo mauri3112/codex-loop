@@ -1,0 +1,36 @@
+.loop-workspace { height: 100%; display: flex; flex-direction: column; min-width: 0; background: var(--surface); }
+.workspace-header { height: 48px; flex: 0 0 auto; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; padding: 0 12px 0 16px; z-index: 20; background: var(--surface); }
+.workspace-back { border: 0; background: transparent; height: 30px; padding: 0 7px; display: flex; align-items: center; gap: 6px; border-radius: 6px; color: var(--muted); font-size: 11px; }
+.workspace-back:hover { color: var(--text); background: var(--surface-subtle); }
+.workspace-identity { min-width: 180px; display: flex; align-items: baseline; gap: 8px; }
+.workspace-identity h1 { max-width: 260px; margin: 0; overflow: hidden; font-size: 13px; font-weight: 590; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-state { font-size: 9px; color: var(--faint); text-transform: capitalize; }
+.workflow-state.state-running { color: var(--accent); } .workflow-state.state-failed, .workflow-state.state-stopped { color: var(--red); } .workflow-state.state-completed { color: var(--green); }
+.workspace-progress { display: flex; align-items: center; gap: 7px; min-width: 135px; }
+.workspace-progress > span { width: 70px; height: 3px; border-radius: 3px; background: var(--surface-subtle); overflow: hidden; }
+.workspace-progress i { display: block; height: 100%; background: var(--accent); transition: width .4s ease; }
+.workspace-progress small { font-size: 9px; color: var(--faint); white-space: nowrap; }
+.workspace-controls { display: flex; align-items: center; gap: 2px; margin-left: auto; }
+.workspace-controls > button { height: 30px; border: 0; background: transparent; border-radius: 6px; padding: 0 8px; font-size: 11px; display: flex; align-items: center; gap: 5px; color: var(--muted); }
+.workspace-controls > button:hover { background: var(--surface-subtle); color: var(--text); }
+.workspace-controls > button.run-primary { background: #171922; color: #fff; padding: 0 11px; }
+.workspace-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.workspace-content > .loop-workspace-canvas { flex: 1; min-height: 0; }
+.static-screen { height: 100%; background: var(--surface); display: flex; flex-direction: column; }
+.static-screen > header { height: 49px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 18px; }
+.static-screen h1 { font-size: 13px; margin: 0; font-weight: 570; }
+.static-screen > section { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px; text-align: center; }
+.static-mark { width: 38px; height: 38px; border: 1px solid var(--border); border-radius: 10px; display: grid; place-items: center; color: var(--muted); }
+.static-screen h2 { font-size: 18px; margin: 16px 0 5px; font-weight: 560; letter-spacing: -.015em; }
+.static-screen p { color: var(--muted); font-size: 12px; }
+.static-composer { margin-top: 25px; width: min(580px, 100%); height: 80px; border: 1px solid var(--border-strong); border-radius: 11px; box-shadow: 0 4px 18px rgba(0,0,0,.04); text-align: left; color: var(--faint); padding: 14px; font-size: 12px; }
+.static-composer span { float: right; background: var(--text); color: white; width: 25px; height: 25px; border-radius: 7px; display: grid; place-items: center; }
+.app-loading, .app-error { height: 100%; display: grid; place-content: center; text-align: center; background: var(--bg); }
+.app-loading span { width: 18px; height: 18px; border: 2px solid var(--border); border-top-color: var(--text); border-radius: 50%; animation: spin .7s linear infinite; margin: auto; }
+.app-loading p, .app-error p { color: var(--muted); font-size: 12px; }.app-error h1 { font-size: 18px; }.app-error button { border: 1px solid var(--border); background: var(--surface); border-radius: 7px; padding: 7px 12px; }
+.app-toast { position: fixed; top: 14px; right: 14px; z-index: 100; background: #292927; color: white; border-radius: 7px; padding: 9px 10px; font-size: 11px; box-shadow: var(--shadow-float); }.app-toast button { color: white; border: 0; background: none; margin-left: 8px; }
+.workflow-missing { display: grid; place-content: center; height: 100%; text-align: center; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 1050px) { .workspace-progress { display: none; } .workspace-identity strong { max-width: 135px; } }
+@media (max-width: 780px) { .workspace-header { padding-left: 48px; } .workspace-back { font-size: 0; padding: 0 5px; } .workspace-back svg { width: 17px; height: 17px; } .workspace-identity { border: 0; padding: 0; min-width: 0; flex: 1; } .workspace-identity strong { max-width: 160px; } .workspace-controls > button span, .workspace-controls > .ui-button:not(:last-child) { display: none; } .workspace-controls > button { width: 30px; padding: 0; justify-content: center; } .workspace-controls > button.run-primary { width: auto; padding: 0 9px; } }
+@media (max-width: 520px) { .workspace-identity .workflow-state { display: none; } .workspace-controls > button:not(.run-primary):not(:last-child) { display: none; } }
