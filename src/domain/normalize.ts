@@ -121,6 +121,8 @@ export function normalizeWorkflow(workflow: Workflow): Workflow {
         detail: event.detail?.replace(LEGACY_MODEL_PATTERN, model),
       };
     }),
+    attentionRequests: Array.isArray(workflow.attentionRequests) ? workflow.attentionRequests : [],
+    interventions: Array.isArray(workflow.interventions) ? workflow.interventions : [],
     runs: workflow.runs.map((run) => ({ ...run, source: run.source ?? "manual" })),
     threads: workflow.threads.map((thread) => ({
       ...thread,

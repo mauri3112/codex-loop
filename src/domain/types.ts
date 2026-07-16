@@ -65,7 +65,7 @@ export interface ContextBlock {
   position: Point;
 }
 
-export type EventKind = "workflow" | "agent" | "tool" | "context" | "edge" | "observer" | "model" | "thread" | "approval" | "file";
+export type EventKind = "workflow" | "agent" | "tool" | "context" | "edge" | "observer" | "model" | "thread" | "approval" | "file" | "attention" | "intervention";
 export interface AuditEvent {
   id: string;
   sequence: number;
@@ -93,6 +93,49 @@ export interface PendingApproval {
   command?: string;
   reason?: string;
 }
+
+export type AttentionKind = "user-input" | "suspected-stall" | "deadlock" | "retry-exhausted" | "observer-escalation";
+export interface AttentionQuestion {
+  id: string;
+  header: string;
+  question: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options: Array<{ label: string; description: string }> | null;
+}
+export interface AttentionRequest {
+  id: string;
+  runId: string;
+  kind: AttentionKind;
+  status: "open" | "resolved" | "dismissed" | "expired";
+  severity: "info" | "warning" | "critical";
+  title: string;
+  message: string;
+  threadId?: string;
+  nodeId?: string;
+  expectedTurnId?: string;
+  serverRequestId?: string | number;
+  questions?: AttentionQuestion[];
+  autoResolutionMs?: number | null;
+  createdAt: string;
+  resolvedAt?: string;
+}
+
+export type InterventionDelivery = "steer" | "queue" | "context";
+export interface InterventionRecord {
+  id: string;
+  idempotencyKey: string;
+  runId: string;
+  delivery: InterventionDelivery;
+  status: "pending" | "delivered" | "failed";
+  message: string;
+  threadId?: string;
+  expectedTurnId?: string;
+  recipientNodeIds?: string[];
+  createdAt: string;
+  deliveredAt?: string;
+  error?: string;
+}
 export interface CodexThreadRuntime {
   threadId?: string;
   activeTurnId?: string;
@@ -117,6 +160,7 @@ export interface ThreadRecord {
   finalOutput?: string;
   codex?: CodexThreadRuntime;
   pendingApproval?: PendingApproval;
+  lastActivityAt?: string;
 }
 
 export interface WorkflowRun {
@@ -179,6 +223,8 @@ export interface Workflow {
   threads: ThreadRecord[];
   runs: WorkflowRun[];
   events: AuditEvent[];
+  attentionRequests: AttentionRequest[];
+  interventions: InterventionRecord[];
   viewport: { x: number; y: number; zoom: number };
   createdAt: string;
   updatedAt: string;

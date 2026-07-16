@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AgentNode, AuditEvent, ContextBlock, ThreadRecord, Workflow } from "../src/domain/types.js";
+import type { AgentNode, AttentionQuestion, AuditEvent, ContextBlock, InterventionDelivery, ThreadRecord, Workflow } from "../src/domain/types.js";
 import { CodexAppServerClient, type AppServerNotification, type AppServerRequest, textInput } from "./codex-app-server.js";
 import { JsonWorkflowStore } from "./store.js";
 
@@ -19,6 +19,45 @@ export interface CodexBridgeService {
   sendInstruction(workflowId: string, threadId: string, instruction: string): Promise<Workflow>;
   stopThread(workflowId: string, threadId: string): Promise<Workflow>;
   resolveApproval(workflowId: string, threadId: string, decision: "accept" | "decline"): Promise<Workflow>;
+  submitIntervention(workflowId: string, input: InterventionInput): Promise<Workflow>;
+  respondToAttention(workflowId: string, attentionId: string, input: AttentionResponseInput): Promise<Workflow>;
+}
+
+export interface InterventionInput {
+  runId: string;
+  idempotencyKey: string;
+  delivery: InterventionDelivery;
+  message: string;
+  threadId?: string;
+  expectedTurnId?: string;
+  recipientNodeIds?: string[];
+}
+
+export interface AttentionResponseInput {
+  runId: string;
+  expectedTurnId?: string;
+  answers: Record<string, string | string[]>;
+}
+
+export class BridgeConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BridgeConflictError";
+  }
+}
+
+export class BridgeInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BridgeInputError";
+  }
+}
+
+export class BridgeResourceNotFoundError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BridgeResourceNotFoundError";
+  }
 }
 
 export interface RunInvocation {
@@ -37,12 +76,16 @@ export class CodexBridge implements CodexBridgeService {
   private readonly nativeThreads = new Map<string, ThreadLocation>();
   private readonly launchingNodes = new Set<string>();
   private readonly pendingApprovals = new Map<string, { requestId: string | number; type: "command" | "file-change" }>();
+  private readonly pendingUserInputs = new Map<string, { requestId: string | number; workflowId: string; attentionId: string }>();
+  private readonly operationQueues = new Map<string, Promise<unknown>>();
+  private runtimePrepared = false;
 
   constructor(private readonly store: JsonWorkflowStore, client = new CodexAppServerClient()) {
     this.client = client;
     this.client.setHandlers({
       onNotification: (notification) => this.handleNotification(notification),
       onRequest: (request) => this.handleRequest(request),
+      onExit: (error) => this.handleAppServerExit(error),
       onStderr: (line) => {
         if (/\b(error|warn)/i.test(line)) console.warn(`[codex app-server] ${line}`);
       },
@@ -61,6 +104,7 @@ export class CodexBridge implements CodexBridgeService {
     if (this.bridgeStatus.state === "connected") return this.status();
     this.bridgeStatus = { state: "connecting" };
     try {
+      await this.prepareRuntime();
       await this.client.connect();
       this.bridgeStatus = { state: "connected" };
     } catch (error) {
@@ -68,6 +112,12 @@ export class CodexBridge implements CodexBridgeService {
       throw error;
     }
     return this.status();
+  }
+
+  async prepareRuntime(): Promise<void> {
+    if (this.runtimePrepared) return;
+    await this.expireStaleInputRequests();
+    this.runtimePrepared = true;
   }
 
   async startWorkflow(workflowId: string, invocation: RunInvocation = { source: "manual" }): Promise<Workflow> {
@@ -93,6 +143,14 @@ export class CodexBridge implements CodexBridgeService {
       }
       for (const edge of draft.edges) edge.status = "idle";
       for (const observer of draft.observers) observer.status = "watching";
+      for (const attention of draft.attentionRequests.filter((candidate) => candidate.status === "open")) {
+        attention.status = "expired";
+        attention.resolvedAt = now();
+      }
+      for (const intervention of draft.interventions.filter((candidate) => candidate.status === "pending")) {
+        intervention.status = "failed";
+        intervention.error = "Superseded by a new workflow run";
+      }
       const sourceLabel = invocation.source === "schedule" ? "schedule" : invocation.source === "webhook" ? "webhook" : "Run control";
       addEvent(draft, { kind: "workflow", type: "workflow.started", actor: invocation.source === "manual" ? "You" : "Codex Loop", message: `Workflow started by ${sourceLabel} through the Codex app-server bridge` });
     });
@@ -101,6 +159,10 @@ export class CodexBridge implements CodexBridgeService {
   }
 
   async pauseWorkflow(workflowId: string): Promise<Workflow> {
+    return this.withWorkflowOperation(workflowId, () => this.pauseWorkflowUnlocked(workflowId));
+  }
+
+  private async pauseWorkflowUnlocked(workflowId: string): Promise<Workflow> {
     return this.store.mutateWorkflow(workflowId, (workflow) => {
       const run = workflow.runs.at(-1);
       if (run?.status === "running") run.status = "paused";
@@ -110,17 +172,25 @@ export class CodexBridge implements CodexBridgeService {
   }
 
   async resumeWorkflow(workflowId: string): Promise<Workflow> {
+    return this.withWorkflowOperation(workflowId, () => this.resumeWorkflowUnlocked(workflowId));
+  }
+
+  private async resumeWorkflowUnlocked(workflowId: string): Promise<Workflow> {
     const workflow = await this.store.mutateWorkflow(workflowId, (draft) => {
       const run = draft.runs.at(-1);
       if (run?.status === "paused") run.status = "running";
       draft.status = "running";
       addEvent(draft, { kind: "workflow", type: "workflow.resumed", actor: "You", message: "Workflow resumed" });
     });
-    void this.schedule(workflowId);
+    void this.deliverPendingInterventions(workflowId).finally(() => this.schedule(workflowId));
     return workflow;
   }
 
   async stopWorkflow(workflowId: string): Promise<Workflow> {
+    return this.withWorkflowOperation(workflowId, () => this.stopWorkflowUnlocked(workflowId));
+  }
+
+  private async stopWorkflowUnlocked(workflowId: string): Promise<Workflow> {
     const workflow = await this.store.getWorkflow(workflowId);
     await Promise.all(workflow.threads.flatMap((thread) => {
       const nativeId = thread.codex?.threadId;
@@ -138,11 +208,17 @@ export class CodexBridge implements CodexBridgeService {
         if (["running", "queued", "waiting", "retrying", "blocked"].includes(thread.status)) thread.status = "stopped";
         if (thread.codex) thread.codex = { ...thread.codex, activeTurnId: undefined, state: "stopped" };
       }
+      expireOpenAttention(draft, "Workflow stopped");
+      failPendingInterventions(draft, "Workflow stopped before delivery");
       addEvent(draft, { kind: "workflow", type: "workflow.stopped", actor: "You", message: "Workflow stopped and active Codex turns interrupted" });
     });
   }
 
   async resetWorkflow(workflowId: string): Promise<Workflow> {
+    return this.withWorkflowOperation(workflowId, () => this.resetWorkflowUnlocked(workflowId));
+  }
+
+  private async resetWorkflowUnlocked(workflowId: string): Promise<Workflow> {
     const workflow = await this.store.getWorkflow(workflowId);
     await Promise.all(workflow.threads.flatMap((thread) => thread.codex?.threadId ? [this.client.archiveThread(thread.codex.threadId).catch(() => undefined)] : []));
     return this.store.mutateWorkflow(workflowId, (draft) => {
@@ -164,8 +240,11 @@ export class CodexBridge implements CodexBridgeService {
         thread.attempts = [];
         thread.finalOutput = undefined;
         thread.pendingApproval = undefined;
+        thread.lastActivityAt = undefined;
         thread.codex = { state: "disconnected" };
       }
+      expireOpenAttention(draft, "Workflow reset");
+      failPendingInterventions(draft, "Workflow reset before delivery");
       addEvent(draft, { kind: "workflow", type: "workflow.reset", actor: "You", message: "Workflow reset; prior native Codex threads were archived" });
     });
   }
@@ -184,6 +263,7 @@ export class CodexBridge implements CodexBridgeService {
       thread.messages.push({ id: id("user"), role: "user", content: text, timestamp: now() });
       thread.status = "running";
       thread.codex = { ...thread.codex, threadId: native.threadId, model: native.model, cwd: native.cwd, state: "running" };
+      thread.lastActivityAt = now();
       if (node) node.status = "running";
       addEvent(draft, { kind: "thread", type: "thread.instruction-added", actor: "You", message: `Sent an instruction to ${thread.title}`, nodeId: node?.id });
     });
@@ -203,12 +283,17 @@ export class CodexBridge implements CodexBridgeService {
       const thread = requireThread(draft, threadId);
       const node = draft.nodes.find((candidate) => candidate.id === thread.nodeId);
       thread.codex = { ...thread.codex, threadId: native.threadId, activeTurnId: turn.turn.id, state: "running" };
+      thread.lastActivityAt = now();
       const attempt = thread.attempts.length + 1;
       thread.attempts.push({ number: attempt, model: node?.effectiveModel ?? thread.model, status: "running", receivedContextBlockIds: node?.readableContextBlockIds ?? [], summary: "Manual Codex turn in progress" });
     });
   }
 
   async stopThread(workflowId: string, threadId: string): Promise<Workflow> {
+    return this.withWorkflowOperation(workflowId, () => this.stopThreadUnlocked(workflowId, threadId));
+  }
+
+  private async stopThreadUnlocked(workflowId: string, threadId: string): Promise<Workflow> {
     const workflow = await this.store.getWorkflow(workflowId);
     const thread = requireThread(workflow, threadId);
     if (thread.codex?.threadId && thread.codex.activeTurnId) {
@@ -225,6 +310,8 @@ export class CodexBridge implements CodexBridgeService {
         const run = draft.runs.at(-1);
         if (run?.status === "running") run.status = "stopped";
       }
+      expireOpenAttention(draft, `Stopped ${target.title}`);
+      failPendingInterventions(draft, `Stopped ${target.title} before delivery`);
       addEvent(draft, { kind: "thread", type: "thread.stopped", actor: "You", message: `Stopped ${target.title}`, nodeId: node?.id });
     });
   }
@@ -242,6 +329,172 @@ export class CodexBridge implements CodexBridgeService {
       const target = requireThread(draft, threadId);
       target.pendingApproval = undefined;
       addEvent(draft, { kind: "approval", type: decision === "accept" ? "approval.accepted" : "approval.declined", actor: "You", message: `${decision === "accept" ? "Approved" : "Declined"} ${pending.type} request`, nodeId: target.nodeId });
+    });
+  }
+
+  async submitIntervention(workflowId: string, input: InterventionInput): Promise<Workflow> {
+    return this.withWorkflowOperation(workflowId, async () => {
+      const message = input.message.trim();
+      if (!message) throw new Error("Intervention message cannot be empty");
+      let workflow = await this.store.getWorkflow(workflowId);
+      const duplicate = workflow.interventions.find((record) => record.idempotencyKey === input.idempotencyKey);
+      if (duplicate) {
+        if (!sameInterventionPayload(duplicate, input, message)) throw new BridgeConflictError("This idempotency key was already used for a different intervention");
+        return workflow;
+      }
+      requireCurrentRun(workflow, input.runId, input.delivery !== "context");
+
+      if (input.delivery === "context") {
+        const recipientNodeIds = Array.from(new Set(input.recipientNodeIds ?? []));
+        if (!recipientNodeIds.length) throw new BridgeInputError("Context interventions require at least one recipient node");
+        for (const nodeId of recipientNodeIds) {
+          if (!workflow.nodes.some((node) => node.id === nodeId)) throw new BridgeInputError(`Recipient node ${nodeId} was not found`);
+        }
+        return this.store.mutateWorkflow(workflowId, (draft) => {
+          requireCurrentRun(draft, input.runId, false);
+          const createdAt = now();
+          const recordId = id("intervention");
+          const block: ContextBlock = {
+            id: `manual-context-${recordId}`,
+            title: "User intervention",
+            summary: message,
+            category: "constraint",
+            createdBy: "manual",
+            allowedAgentNodeIds: recipientNodeIds,
+            estimatedTokens: Math.ceil(message.length / 4),
+            createdAt,
+            position: contextPosition(draft, recipientNodeIds),
+          };
+          draft.contextBlocks.push(block);
+          for (const node of draft.nodes.filter((candidate) => recipientNodeIds.includes(candidate.id))) {
+            if (!node.readableContextBlockIds.includes(block.id)) node.readableContextBlockIds.push(block.id);
+          }
+          draft.interventions.push({
+            id: recordId,
+            idempotencyKey: input.idempotencyKey,
+            runId: input.runId,
+            delivery: "context",
+            status: "delivered",
+            message,
+            recipientNodeIds,
+            createdAt,
+            deliveredAt: createdAt,
+          });
+          addEvent(draft, { kind: "intervention", type: "intervention.context-delivered", actor: "You", message: `Shared intervention context with ${recipientNodeIds.length} node${recipientNodeIds.length === 1 ? "" : "s"}`, contextBlockId: block.id });
+        });
+      }
+
+      if (!input.threadId) throw new BridgeInputError(`${input.delivery} interventions require a threadId`);
+      const thread = workflow.threads.find((candidate) => candidate.id === input.threadId);
+      if (!thread) throw new BridgeInputError(`Target thread ${input.threadId} was not found`);
+      const activeTurnId = thread.codex?.activeTurnId;
+      if (input.delivery === "steer") {
+        if (!activeTurnId || !input.expectedTurnId) throw new BridgeConflictError("The target thread no longer has an active turn; queue the intervention instead");
+        if (activeTurnId !== input.expectedTurnId) throw new BridgeConflictError("The target turn changed before the intervention was submitted");
+      } else if (!activeTurnId || !input.expectedTurnId) {
+        throw new BridgeConflictError("Queue interventions require an active turn; refresh and choose an active agent");
+      } else if (activeTurnId !== input.expectedTurnId) {
+        throw new BridgeConflictError("The active turn changed; refresh before queueing this intervention");
+      }
+
+      const createdAt = now();
+      workflow = await this.store.mutateWorkflow(workflowId, (draft) => {
+        requireCurrentRun(draft, input.runId);
+        const liveThread = requireThread(draft, input.threadId as string);
+        const liveTurnId = liveThread.codex?.activeTurnId;
+        if (input.delivery === "steer") {
+          if (!liveTurnId || liveTurnId !== input.expectedTurnId) throw new BridgeConflictError("The target turn changed before the intervention was delivered");
+        } else if (liveTurnId !== input.expectedTurnId) {
+          throw new BridgeConflictError("The target turn changed before the intervention was queued");
+        }
+        draft.interventions.push({
+          id: id("intervention"),
+          idempotencyKey: input.idempotencyKey,
+          runId: input.runId,
+          delivery: input.delivery,
+          status: input.delivery === "queue" ? "pending" : "delivered",
+          message,
+          threadId: input.threadId,
+          expectedTurnId: input.expectedTurnId,
+          createdAt,
+          ...(input.delivery === "steer" ? { deliveredAt: createdAt } : {}),
+        });
+        addEvent(draft, {
+          kind: "intervention",
+          type: input.delivery === "steer" ? "intervention.steered" : "intervention.queued",
+          actor: "You",
+          message: input.delivery === "steer" ? `Steered ${thread.title}` : `Queued a follow-up for ${thread.title}`,
+          nodeId: thread.nodeId,
+        });
+      });
+
+      if (input.delivery === "steer") {
+        await this.connect();
+        const current = requireThread(workflow, input.threadId);
+        if (!current.codex?.threadId || !current.codex.activeTurnId) throw new BridgeConflictError("The target turn completed before it could be steered");
+        try {
+          await this.client.steerTurn(current.codex.threadId, input.expectedTurnId as string, message);
+        } catch (error) {
+          await this.failIntervention(workflowId, input.idempotencyKey, errorMessage(error));
+          throw error;
+        }
+        return this.store.mutateWorkflow(workflowId, (draft) => {
+          const target = requireThread(draft, input.threadId as string);
+          target.messages.push({ id: id("user"), role: "user", content: message, timestamp: now() });
+          target.lastActivityAt = now();
+        });
+      }
+
+      // The original turn can complete between validation and persistence. A
+      // post-persist delivery check closes that race without interrupting a
+      // turn that is still active.
+      await this.deliverNextQueuedIntervention(workflowId, input.threadId);
+      return this.store.getWorkflow(workflowId);
+    });
+  }
+
+  async respondToAttention(workflowId: string, attentionId: string, input: AttentionResponseInput): Promise<Workflow> {
+    return this.withWorkflowOperation(workflowId, async () => {
+      const workflow = await this.store.getWorkflow(workflowId);
+      requireCurrentRun(workflow, input.runId);
+      const attention = workflow.attentionRequests.find((candidate) => candidate.id === attentionId);
+      if (!attention) throw new BridgeResourceNotFoundError(`Attention request ${attentionId} was not found`);
+      if (attention.kind !== "user-input") throw new BridgeInputError("Only user-input attention requests accept structured answers");
+      if (attention.status !== "open") throw new BridgeConflictError("This attention request is no longer open");
+      const thread = attention.threadId ? requireThread(workflow, attention.threadId) : undefined;
+      if (!attention.expectedTurnId || input.expectedTurnId !== attention.expectedTurnId || thread?.codex?.activeTurnId !== attention.expectedTurnId) {
+        throw new BridgeConflictError("The turn that requested this input is no longer active");
+      }
+      const pending = this.pendingUserInputs.get(attentionId);
+      if (!pending || String(pending.requestId) !== String(attention.serverRequestId)) {
+        throw new BridgeConflictError("The native user-input request is no longer active");
+      }
+      const questions = attention.questions ?? [];
+      const answers: Record<string, { answers: string[] }> = {};
+      for (const question of questions) {
+        const answer = input.answers[question.id];
+        if (answer === undefined) throw new BridgeInputError(`Missing answer for question ${question.id}`);
+        const values = (Array.isArray(answer) ? answer : [answer]).map((value) => value.trim()).filter(Boolean);
+        if (!values.length) throw new BridgeInputError(`Answer for question ${question.id} cannot be empty`);
+        answers[question.id] = { answers: values };
+      }
+
+      this.client.respond(pending.requestId, { answers });
+      this.pendingUserInputs.delete(attentionId);
+      return this.store.mutateWorkflow(workflowId, (draft) => {
+        const target = draft.attentionRequests.find((candidate) => candidate.id === attentionId);
+        if (!target || target.status !== "open") return;
+        target.status = "resolved";
+        target.resolvedAt = now();
+        if (target.threadId) {
+          const targetThread = requireThread(draft, target.threadId);
+          targetThread.lastActivityAt = now();
+          targetThread.status = "running";
+          const targetNode = draft.nodes.find((node) => node.id === targetThread.nodeId);
+          if (targetNode?.status === "blocked") targetNode.status = "running";
+        }
+        addEvent(draft, { kind: "attention", type: "attention.responded", actor: "You", message: `Answered ${questions.length} user-input question${questions.length === 1 ? "" : "s"}`, nodeId: target.nodeId });
+      });
     });
   }
 
@@ -269,6 +522,7 @@ export class CodexBridge implements CodexBridgeService {
         node.attempt += 1;
         thread.status = "running";
         thread.codex = { ...thread.codex, state: "starting", lastError: undefined };
+        thread.lastActivityAt = now();
         thread.attempts.push({ number: node.attempt, model: node.effectiveModel, status: "running", receivedContextBlockIds: [...node.readableContextBlockIds], summary: "Starting native Codex turn" });
         addEvent(draft, { kind: "agent", type: "node.started", actor: node.name, message: `${node.name} is connecting to a native Codex thread`, nodeId });
       });
@@ -287,6 +541,7 @@ export class CodexBridge implements CodexBridgeService {
         const target = requireThread(draft, liveNode.threadId);
         const targetNode = requireNode(draft, nodeId);
         target.codex = { threadId: native.threadId, activeTurnId: turn.turn.id, model: native.model, cwd: native.cwd, state: "running" };
+        target.lastActivityAt = now();
         targetNode.progress = 15;
         addEvent(draft, { kind: "thread", type: "turn.started", actor: targetNode.name, message: `Native Codex turn ${turn.turn.id.slice(0, 8)} started`, nodeId });
       });
@@ -325,6 +580,7 @@ export class CodexBridge implements CodexBridgeService {
     await this.store.mutateWorkflow(workflow.id, (draft) => {
       const target = requireThread(draft, thread.id);
       target.codex = { threadId: started.thread.id, model: started.model, cwd: started.cwd, state: "idle" };
+      target.lastActivityAt = now();
       addEvent(draft, { kind: "thread", type: "thread.created", actor: "Codex Loop", message: `Created native Codex thread ${started.thread.id.slice(0, 8)} for ${target.title}`, nodeId: target.nodeId });
     });
     return { threadId: started.thread.id, model: started.model, cwd: started.cwd };
@@ -335,6 +591,11 @@ export class CodexBridge implements CodexBridgeService {
     if (!nativeId) return;
     const location = this.nativeThreads.get(nativeId);
     if (!location) return;
+
+    if (notification.method === "serverRequest/resolved") {
+      await this.resolveServerRequest(location, notification.params.requestId);
+      return;
+    }
 
     if (notification.method === "item/agentMessage/delta") {
       await this.updateAssistantDelta(location, stringValue(notification.params.itemId), stringValue(notification.params.delta));
@@ -349,6 +610,7 @@ export class CodexBridge implements CodexBridgeService {
       await this.store.mutateWorkflow(location.workflowId, (workflow) => {
         const thread = requireThread(workflow, location.threadId);
         thread.codex = { ...thread.codex, threadId: nativeId, activeTurnId: stringValue(turn.id), state: "running" };
+        thread.lastActivityAt = now();
       });
       return;
     }
@@ -360,13 +622,49 @@ export class CodexBridge implements CodexBridgeService {
       await this.store.mutateWorkflow(location.workflowId, (workflow) => {
         const thread = requireThread(workflow, location.threadId);
         thread.codex = { ...thread.codex, state: "failed", lastError: stringValue(notification.params.message) || "Codex app-server error" };
+        thread.lastActivityAt = now();
       });
+      return;
+    }
+    if (/delta|progress|terminalInteraction|patchUpdated/i.test(notification.method)) {
+      await this.touchThread(location);
     }
   }
 
   private async handleRequest(request: AppServerRequest): Promise<void> {
     const nativeId = stringValue(request.params.threadId);
     const location = nativeId ? this.nativeThreads.get(nativeId) : undefined;
+    if (location && request.method === "item/tool/requestUserInput") {
+      const questions = parseAttentionQuestions(request.params.questions);
+      const attentionId = id("attention");
+      this.pendingUserInputs.set(attentionId, { requestId: request.id, workflowId: location.workflowId, attentionId });
+      await this.store.mutateWorkflow(location.workflowId, (workflow) => {
+        const thread = requireThread(workflow, location.threadId);
+        const turnId = stringValue(request.params.turnId) || thread.codex?.activeTurnId;
+        thread.lastActivityAt = now();
+        thread.status = "waiting";
+        const node = workflow.nodes.find((candidate) => candidate.id === thread.nodeId);
+        if (node?.status === "running") node.status = "blocked";
+        workflow.attentionRequests.push({
+          id: attentionId,
+          runId: workflow.runs.at(-1)?.id ?? "manual",
+          kind: "user-input",
+          status: "open",
+          severity: "warning",
+          title: questions[0]?.header || "Codex needs your input",
+          message: questions.map((question) => question.question).join(" ") || `${thread.title} requested user input`,
+          threadId: thread.id,
+          nodeId: thread.nodeId,
+          expectedTurnId: turnId,
+          serverRequestId: request.id,
+          questions,
+          autoResolutionMs: numberOrNull(request.params.autoResolutionMs),
+          createdAt: now(),
+        });
+        addEvent(workflow, { kind: "attention", type: "attention.user-input-requested", actor: thread.title, message: `${thread.title} requested user input`, nodeId: thread.nodeId });
+      });
+      return;
+    }
     const type = request.method === "item/commandExecution/requestApproval" ? "command" : request.method === "item/fileChange/requestApproval" ? "file-change" : undefined;
     if (!location || !type) {
       this.client.respondError(request.id, -32601, `Codex Loop does not handle ${request.method}`);
@@ -381,6 +679,7 @@ export class CodexBridge implements CodexBridgeService {
         command: stringValue(request.params.command) || undefined,
         reason: stringValue(request.params.reason) || undefined,
       };
+      thread.lastActivityAt = now();
       addEvent(workflow, { kind: "approval", type: "approval.requested", actor: thread.title, message: `${thread.title} requested ${type} approval`, nodeId: thread.nodeId });
     });
   }
@@ -389,6 +688,7 @@ export class CodexBridge implements CodexBridgeService {
     if (!itemId || !delta) return;
     await this.store.mutateWorkflow(location.workflowId, (workflow) => {
       const thread = requireThread(workflow, location.threadId);
+      thread.lastActivityAt = now();
       const existing = thread.messages.find((message) => message.id === itemId);
       if (existing) existing.content += delta;
       else thread.messages.push({ id: itemId, role: "assistant", content: delta, timestamp: now() });
@@ -403,6 +703,7 @@ export class CodexBridge implements CodexBridgeService {
     if (!itemId) return;
     await this.store.mutateWorkflow(location.workflowId, (workflow) => {
       const thread = requireThread(workflow, location.threadId);
+      thread.lastActivityAt = now();
       if (itemType === "agentMessage") {
         const text = stringValue(item.text);
         const existing = thread.messages.find((message) => message.id === itemId);
@@ -446,14 +747,20 @@ export class CodexBridge implements CodexBridgeService {
       const thread = requireThread(draft, location.threadId);
       const node = draft.nodes.find((candidate) => candidate.id === thread.nodeId);
       const attempt = thread.attempts.at(-1);
+      const queuedFollowUp = status === "completed" && draft.interventions.some((record) => record.delivery === "queue" && record.status === "pending" && record.threadId === thread.id);
       thread.codex = { ...thread.codex, activeTurnId: undefined, state: status === "completed" ? "idle" : status === "interrupted" ? "stopped" : "failed", lastError: error || undefined };
+      thread.lastActivityAt = now();
       if (status === "completed") {
-        thread.status = "completed";
+        thread.status = queuedFollowUp ? "queued" : "completed";
         if (attempt?.status === "running") {
           attempt.status = "completed";
           attempt.summary = "Native Codex turn completed";
         }
-        if (node) {
+        if (node && queuedFollowUp) {
+          node.status = "running";
+          node.progress = Math.max(node.progress, 90);
+          addEvent(draft, { kind: "intervention", type: "intervention.follow-up-ready", actor: "Codex Loop", message: `Starting the queued follow-up for ${thread.title}`, nodeId: node.id });
+        } else if (node) {
           node.status = "completed";
           node.progress = 100;
           const outgoing = draft.edges.filter((candidate) => candidate.source === node.id);
@@ -486,13 +793,18 @@ export class CodexBridge implements CodexBridgeService {
             draft.status = "failed";
             const run = draft.runs.at(-1);
             if (run?.status === "running") run.status = "stopped";
+            failPendingInterventions(draft, "Workflow failed before queued guidance could be delivered");
+            addRetryExhaustedAttention(draft, node, thread);
           }
+          if (!retry && status === "interrupted") failPendingThreadInterventions(draft, thread.id, "Target turn was interrupted before queued guidance could be delivered");
         }
         addEvent(draft, { kind: "agent", type: `node.${status || "failed"}`, actor: node?.name ?? thread.title, message: error || `Codex turn ${status || "failed"}`, nodeId: node?.id });
       }
       finishWorkflowIfDone(draft);
     });
-    if (workflow.status === "running") void this.schedule(workflow.id);
+    if (status === "completed") await this.deliverQueuedInterventions(workflow.id, location.threadId);
+    const current = await this.store.getWorkflow(workflow.id);
+    if (current.status === "running") void this.schedule(workflow.id);
   }
 
   private async failNode(workflowId: string, nodeId: string, message: string): Promise<boolean> {
@@ -513,10 +825,171 @@ export class CodexBridge implements CodexBridgeService {
         workflow.status = "failed";
         const run = workflow.runs.at(-1);
         if (run?.status === "running") run.status = "stopped";
+        addRetryExhaustedAttention(workflow, node, thread);
       }
       addEvent(workflow, { kind: "agent", type: retry ? "node.retrying" : "node.failed", actor: node.name, message: retry ? `${message}; retrying` : message, nodeId });
     });
     return retry;
+  }
+
+  private async deliverQueuedInterventions(workflowId: string, threadId: string): Promise<void> {
+    await this.withWorkflowOperation(workflowId, () => this.deliverNextQueuedIntervention(workflowId, threadId));
+  }
+
+  private async deliverPendingInterventions(workflowId: string): Promise<void> {
+    await this.withWorkflowOperation(workflowId, async () => {
+      const workflow = await this.store.getWorkflow(workflowId);
+      const threadIds = Array.from(new Set(workflow.interventions
+        .filter((record) => record.delivery === "queue" && record.status === "pending" && record.threadId)
+        .map((record) => record.threadId as string)));
+      for (const threadId of threadIds) await this.deliverNextQueuedIntervention(workflowId, threadId);
+    });
+  }
+
+  private async deliverNextQueuedIntervention(workflowId: string, threadId: string): Promise<void> {
+    let workflow = await this.store.getWorkflow(workflowId);
+    if (workflow.status !== "running" || workflow.runs.at(-1)?.status !== "running") return;
+    const record = workflow.interventions.find((candidate) => candidate.delivery === "queue" && candidate.status === "pending" && candidate.threadId === threadId);
+    if (!record) return;
+    const thread = requireThread(workflow, threadId);
+    if (thread.codex?.activeTurnId) return;
+    await this.connect();
+    const native = await this.ensureThread(workflow, thread);
+    workflow = await this.store.getWorkflow(workflowId);
+    if (workflow.status !== "running" || workflow.runs.at(-1)?.id !== record.runId || workflow.runs.at(-1)?.status !== "running") return;
+    const currentRecord = workflow.interventions.find((candidate) => candidate.id === record.id);
+    if (!currentRecord || currentRecord.status !== "pending") return;
+    const currentThread = requireThread(workflow, threadId);
+    if (currentThread.codex?.activeTurnId) return;
+    try {
+      const turn = await this.client.startTurn({
+        threadId: native.threadId,
+        input: [textInput(record.message)],
+        effort: effortFor(workflow.nodes.find((node) => node.id === currentThread.nodeId)),
+        responsesapiClientMetadata: { codex_loop_workflow_id: workflow.id, codex_loop_intervention_id: record.id },
+      });
+      await this.store.mutateWorkflow(workflowId, (draft) => {
+        const targetRecord = draft.interventions.find((candidate) => candidate.id === record.id);
+        if (!targetRecord || targetRecord.status !== "pending") return;
+        const target = requireThread(draft, threadId);
+        const node = draft.nodes.find((candidate) => candidate.id === target.nodeId);
+        targetRecord.status = "delivered";
+        targetRecord.deliveredAt = now();
+        target.messages.push({ id: id("user"), role: "user", content: record.message, timestamp: now() });
+        target.status = "running";
+        target.lastActivityAt = now();
+        target.codex = { ...target.codex, threadId: native.threadId, activeTurnId: turn.turn.id, state: "running" };
+        target.attempts.push({ number: target.attempts.length + 1, model: node?.effectiveModel ?? target.model, status: "running", receivedContextBlockIds: node?.readableContextBlockIds ?? [], summary: "Queued user intervention in progress" });
+        if (node) node.status = "running";
+        addEvent(draft, { kind: "intervention", type: "intervention.queue-delivered", actor: "Codex Loop", message: `Delivered queued follow-up to ${target.title}`, nodeId: target.nodeId });
+      });
+    } catch (error) {
+      await this.failIntervention(workflowId, record.idempotencyKey, errorMessage(error));
+      throw error;
+    }
+  }
+
+  private async failIntervention(workflowId: string, idempotencyKey: string, message: string): Promise<void> {
+    await this.store.mutateWorkflow(workflowId, (workflow) => {
+      const record = workflow.interventions.find((candidate) => candidate.idempotencyKey === idempotencyKey);
+      if (!record) return;
+      record.status = "failed";
+      record.error = message;
+      addEvent(workflow, { kind: "intervention", type: "intervention.failed", actor: "Codex Loop", message: `Intervention delivery failed: ${message}`, nodeId: record.threadId ? workflow.threads.find((thread) => thread.id === record.threadId)?.nodeId : undefined });
+    });
+  }
+
+  private async touchThread(location: ThreadLocation): Promise<void> {
+    await this.store.mutateWorkflow(location.workflowId, (workflow) => {
+      requireThread(workflow, location.threadId).lastActivityAt = now();
+    });
+  }
+
+  private async resolveServerRequest(location: ThreadLocation, requestId: unknown): Promise<void> {
+    const requestKey = String(requestId ?? "");
+    if (!requestKey) return;
+    const workflow = await this.store.mutateWorkflow(location.workflowId, (draft) => {
+      const attention = draft.attentionRequests.find((candidate) => candidate.status === "open" && String(candidate.serverRequestId) === requestKey);
+      if (!attention) return;
+      attention.status = "resolved";
+      attention.resolvedAt = now();
+      const thread = requireThread(draft, location.threadId);
+      thread.lastActivityAt = now();
+      thread.status = "running";
+      const node = draft.nodes.find((candidate) => candidate.id === thread.nodeId);
+      if (node?.status === "blocked") node.status = "running";
+      addEvent(draft, { kind: "attention", type: "attention.auto-resolved", actor: "Codex", message: `User-input request for ${thread.title} was resolved by Codex`, nodeId: thread.nodeId });
+    });
+    this.pendingUserInputs.forEach((pending, attentionId) => {
+      if (pending.workflowId === workflow.id && String(pending.requestId) === requestKey) this.pendingUserInputs.delete(attentionId);
+    });
+  }
+
+  private async expireStaleInputRequests(): Promise<void> {
+    const { workflows } = await this.store.getData();
+    for (const workflow of workflows) {
+      if (!workflow.attentionRequests.some((attention) => attention.kind === "user-input" && attention.status === "open")) continue;
+      await this.store.mutateWorkflow(workflow.id, (draft) => {
+        let failedWaitingThread = false;
+        for (const attention of draft.attentionRequests) {
+          if (attention.kind !== "user-input" || attention.status !== "open") continue;
+          attention.status = "expired";
+          attention.resolvedAt = now();
+          const thread = attention.threadId ? draft.threads.find((candidate) => candidate.id === attention.threadId) : undefined;
+          if (thread?.codex?.activeTurnId) {
+            failedWaitingThread = true;
+            thread.status = "failed";
+            thread.codex = { ...thread.codex, activeTurnId: undefined, state: "failed", lastError: "The native input request expired with the previous app-server process" };
+            const node = draft.nodes.find((candidate) => candidate.id === thread.nodeId);
+            if (node) node.status = "failed";
+          }
+          addEvent(draft, { kind: "attention", type: "attention.expired", actor: "Codex Loop", message: "A user-input request expired after the Codex app-server restarted", nodeId: attention.nodeId });
+        }
+        if (failedWaitingThread && ["running", "paused"].includes(draft.status)) {
+          draft.status = "failed";
+          const run = draft.runs.at(-1);
+          if (run && ["running", "paused"].includes(run.status)) run.status = "stopped";
+          failPendingInterventions(draft, "Native input expired before queued guidance could be delivered");
+        }
+      });
+    }
+  }
+
+  private async handleAppServerExit(error: Error): Promise<void> {
+    this.bridgeStatus = { state: "disconnected", error: error.message };
+    this.pendingUserInputs.clear();
+    this.pendingApprovals.clear();
+    await this.expireStaleInputRequests();
+    const { workflows } = await this.store.getData();
+    for (const workflow of workflows.filter((candidate) => candidate.threads.some((thread) => thread.codex?.activeTurnId))) {
+      await this.store.mutateWorkflow(workflow.id, (draft) => {
+        for (const thread of draft.threads.filter((candidate) => candidate.codex?.activeTurnId)) {
+          thread.status = "failed";
+          thread.codex = { ...thread.codex, activeTurnId: undefined, state: "failed", lastError: error.message };
+          const node = draft.nodes.find((candidate) => candidate.id === thread.nodeId);
+          if (node) node.status = "failed";
+        }
+        if (["running", "paused"].includes(draft.status)) {
+          draft.status = "failed";
+          const run = draft.runs.at(-1);
+          if (run && ["running", "paused"].includes(run.status)) run.status = "stopped";
+        }
+        failPendingInterventions(draft, "Codex app-server disconnected before delivery");
+        addEvent(draft, { kind: "workflow", type: "workflow.bridge-disconnected", actor: "Codex Loop", message: "Codex app-server disconnected while work was active" });
+      });
+    }
+    this.nativeThreads.clear();
+  }
+
+  private withWorkflowOperation<T>(workflowId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.operationQueues.get(workflowId) ?? Promise.resolve();
+    const pending = previous.catch(() => undefined).then(operation);
+    this.operationQueues.set(workflowId, pending);
+    void pending.then(
+      () => { if (this.operationQueues.get(workflowId) === pending) this.operationQueues.delete(workflowId); },
+      () => { if (this.operationQueues.get(workflowId) === pending) this.operationQueues.delete(workflowId); },
+    );
+    return pending;
   }
 }
 
@@ -565,6 +1038,110 @@ function finishWorkflowIfDone(workflow: Workflow): void {
     run.completedAt = now();
   }
   addEvent(workflow, { kind: "workflow", type: "workflow.completed", actor: "Codex Loop", message: `Workflow completed through ${workflow.nodes.length} native Codex threads` });
+}
+
+function requireCurrentRun(workflow: Workflow, runId: string, requireActive = true): void {
+  const run = workflow.runs.at(-1);
+  if (!run || run.id !== runId) throw new BridgeConflictError("The workflow run changed; refresh before intervening");
+  if (requireActive && !["running", "paused"].includes(run.status)) throw new BridgeConflictError("The target workflow run is no longer active");
+  if (!requireActive && run.status === "completed") throw new BridgeConflictError("The target workflow run is already complete");
+}
+
+function parseAttentionQuestions(value: unknown): AttentionQuestion[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const question = asRecord(entry);
+    const questionId = stringValue(question.id);
+    const prompt = stringValue(question.question);
+    if (!questionId || !prompt) return [];
+    const options = Array.isArray(question.options)
+      ? question.options.flatMap((option) => {
+        const candidate = asRecord(option);
+        const label = stringValue(candidate.label);
+        return label ? [{ label, description: stringValue(candidate.description) }] : [];
+      })
+      : null;
+    return [{
+      id: questionId,
+      header: stringValue(question.header) || "Input required",
+      question: prompt,
+      isOther: question.isOther === true,
+      isSecret: question.isSecret === true,
+      options,
+    }];
+  });
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function contextPosition(workflow: Workflow, recipientNodeIds: string[]): { x: number; y: number } {
+  const nodes = workflow.nodes.filter((node) => recipientNodeIds.includes(node.id));
+  if (!nodes.length) return { x: 80, y: 560 };
+  return {
+    x: Math.round(nodes.reduce((sum, node) => sum + node.position.x, 0) / nodes.length),
+    y: Math.max(...nodes.map((node) => node.position.y + node.size.height)) + 80,
+  };
+}
+
+function expireOpenAttention(workflow: Workflow, reason: string): void {
+  let expired = false;
+  for (const attention of workflow.attentionRequests.filter((candidate) => candidate.status === "open")) {
+    attention.status = "expired";
+    attention.resolvedAt = now();
+    expired = true;
+  }
+  for (const thread of workflow.threads) thread.pendingApproval = undefined;
+  if (expired) {
+    addEvent(workflow, { kind: "attention", type: "attention.expired", actor: "Codex Loop", message: reason });
+  }
+}
+
+function failPendingInterventions(workflow: Workflow, reason: string): void {
+  for (const intervention of workflow.interventions.filter((candidate) => candidate.status === "pending")) {
+    intervention.status = "failed";
+    intervention.error = reason;
+  }
+}
+
+function failPendingThreadInterventions(workflow: Workflow, threadId: string, reason: string): void {
+  for (const intervention of workflow.interventions.filter((candidate) => candidate.status === "pending" && candidate.threadId === threadId)) {
+    intervention.status = "failed";
+    intervention.error = reason;
+  }
+}
+
+function addRetryExhaustedAttention(workflow: Workflow, node: AgentNode, thread: ThreadRecord): void {
+  if (node.attempt < node.retryPolicy.maxAttempts) return;
+  const asksUser = workflow.edges.some((edge) => edge.source === node.id && edge.failureBehavior === "ask-user")
+    || workflow.observers.some((observer) => observer.coveredNodeIds.includes(node.id) && observer.escalationBehavior === "ask-user");
+  const run = workflow.runs.at(-1);
+  if (!asksUser || !run || workflow.attentionRequests.some((attention) => attention.runId === run.id && attention.kind === "retry-exhausted" && attention.nodeId === node.id && attention.status === "open")) return;
+  workflow.attentionRequests.push({
+    id: id("attention"),
+    runId: run.id,
+    kind: "retry-exhausted",
+    status: "open",
+    severity: "critical",
+    title: `${node.name} exhausted its retries`,
+    message: "The loop needs user direction before the next recovery attempt.",
+    nodeId: node.id,
+    threadId: thread.id,
+    createdAt: now(),
+  });
+  addEvent(workflow, { kind: "attention", type: "attention.retry-exhausted", actor: "Loop supervisor", message: `${node.name} exhausted its retries and needs user direction`, nodeId: node.id });
+}
+
+function sameInterventionPayload(record: Workflow["interventions"][number], input: InterventionInput, message: string): boolean {
+  const recordRecipients = [...(record.recipientNodeIds ?? [])].sort();
+  const inputRecipients = [...(input.recipientNodeIds ?? [])].sort();
+  return record.runId === input.runId
+    && record.delivery === input.delivery
+    && record.message === message
+    && record.threadId === input.threadId
+    && record.expectedTurnId === input.expectedTurnId
+    && JSON.stringify(recordRecipients) === JSON.stringify(inputRecipients);
 }
 
 function addEvent(workflow: Workflow, input: Omit<AuditEvent, "id" | "sequence" | "runId" | "timestamp" | "logicalTime">): void {

@@ -13,12 +13,14 @@ describe("workflow normalization", () => {
   it("migrates legacy model strings and guarantees one enclosing supervisor", () => {
     const workflow = createGeneratedWorkflow("Verify the loop UI");
     workflow.events.push({ id: "legacy-model", sequence: 1, runId: "run", kind: "model", type: "model.started", actor: "Agent", message: "Started with gpt-5.2-codex", timestamp: new Date().toISOString(), logicalTime: 1, nodeId: workflow.nodes[0].id });
-    const legacy = JSON.parse(JSON.stringify(workflow)) as { defaultModel: string; nodes: Array<Record<string, unknown>>; observers: unknown[]; environmentVariables?: unknown };
+    const legacy = JSON.parse(JSON.stringify(workflow)) as { defaultModel: string; nodes: Array<Record<string, unknown>>; observers: unknown[]; environmentVariables?: unknown; attentionRequests?: unknown; interventions?: unknown };
     legacy.defaultModel = "gpt-5.2-codex";
     legacy.nodes[0].configuredModel = "gpt-5.2-codex";
     legacy.nodes[0].effectiveModel = "gpt-5.2-codex";
     legacy.observers = [];
     delete legacy.environmentVariables;
+    delete legacy.attentionRequests;
+    delete legacy.interventions;
 
     const normalized = normalizeWorkflow(legacy as unknown as Workflow);
     expect(AGENT_MODELS).toContain(normalized.defaultModel);
@@ -29,5 +31,7 @@ describe("workflow normalization", () => {
     expect(normalized.observers[0].coveredNodeIds).toEqual(normalized.nodes.map((node) => node.id));
     expect(normalized.events[0].message).toBe("Started with Luna");
     expect(normalized.environmentVariables).toEqual([]);
+    expect(normalized.attentionRequests).toEqual([]);
+    expect(normalized.interventions).toEqual([]);
   });
 });

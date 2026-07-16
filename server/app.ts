@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { Workflow } from "../src/domain/types.js";
 import { createBlankWorkflow, createGeneratedWorkflow } from "../src/data/seed.js";
 import { JsonWorkflowStore, WorkflowNotFoundError } from "./store.js";
-import { CodexBridge, type CodexBridgeService } from "./codex-bridge.js";
+import { BridgeConflictError, BridgeInputError, BridgeResourceNotFoundError, CodexBridge, type CodexBridgeService } from "./codex-bridge.js";
 
 const generateSchema = z.object({ task: z.string().trim().min(1).max(12_000) });
 const instructionSchema = z.object({ instruction: z.string().trim().min(1).max(12_000) });
@@ -24,6 +24,27 @@ const runConfigurationSchema = z.object({
   }),
 });
 const triggerValuesSchema = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])).default({});
+const interventionSchema = z.object({
+  runId: z.string().min(1).max(256),
+  idempotencyKey: z.string().min(1).max(256),
+  delivery: z.enum(["steer", "queue", "context"]),
+  message: z.string().trim().min(1).max(12_000),
+  threadId: z.string().min(1).max(256).optional(),
+  expectedTurnId: z.string().min(1).max(256).optional(),
+  recipientNodeIds: z.array(z.string().min(1).max(256)).max(100).optional(),
+}).superRefine((input, context) => {
+  if (input.delivery === "context" && !input.recipientNodeIds?.length) {
+    context.addIssue({ code: "custom", path: ["recipientNodeIds"], message: "Context interventions require recipients" });
+  }
+  if (input.delivery !== "context" && (!input.threadId || !input.expectedTurnId)) {
+    context.addIssue({ code: "custom", path: ["threadId"], message: `${input.delivery} interventions require a thread and expected turn` });
+  }
+});
+const attentionResponseSchema = z.object({
+  runId: z.string().min(1).max(256),
+  expectedTurnId: z.string().min(1).max(256).optional(),
+  answers: z.record(z.string(), z.union([z.string().max(12_000), z.array(z.string().max(12_000)).min(1).max(20)])),
+});
 
 const workflowSchema = z.custom<Workflow>((value) => {
   if (!value || typeof value !== "object") return false;
@@ -170,6 +191,22 @@ export function createApp(store = new JsonWorkflowStore(), bridge: CodexBridgeSe
   );
 
   app.post(
+    "/api/workflows/:id/interventions",
+    asyncRoute(async (request, response) => {
+      const input = interventionSchema.parse(request.body);
+      response.status(input.delivery === "context" ? 201 : 202).json(await bridge.submitIntervention(String(request.params.id), input));
+    }),
+  );
+
+  app.post(
+    "/api/workflows/:id/attention/:attentionId/respond",
+    asyncRoute(async (request, response) => {
+      const input = attentionResponseSchema.parse(request.body);
+      response.json(await bridge.respondToAttention(String(request.params.id), String(request.params.attentionId), input));
+    }),
+  );
+
+  app.post(
     "/api/workflows/:id/threads/:threadId/turn",
     asyncRoute(async (request, response) => {
       const { instruction } = instructionSchema.parse(request.body);
@@ -210,6 +247,18 @@ export function createApp(store = new JsonWorkflowStore(), bridge: CodexBridgeSe
   });
 
   app.use((error: unknown, _request: Request, response: Response, _next: NextFunction) => {
+    if (error instanceof BridgeConflictError) {
+      response.status(409).json({ error: error.message });
+      return;
+    }
+    if (error instanceof BridgeInputError) {
+      response.status(400).json({ error: error.message });
+      return;
+    }
+    if (error instanceof BridgeResourceNotFoundError) {
+      response.status(404).json({ error: error.message });
+      return;
+    }
     if (error instanceof WorkflowNotFoundError) {
       response.status(404).json({ error: error.message });
       return;

@@ -50,6 +50,8 @@ describe("webhook workflow runs", () => {
       sendInstruction: (id) => store.getWorkflow(id),
       stopThread: (id) => store.getWorkflow(id),
       resolveApproval: (id) => store.getWorkflow(id),
+      submitIntervention: (id) => store.getWorkflow(id),
+      respondToAttention: (id) => store.getWorkflow(id),
     };
     server = createApp(store, bridge).listen(0, "127.0.0.1");
     await new Promise<void>((resolve) => server.once("listening", resolve));

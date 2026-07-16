@@ -13,6 +13,8 @@
 .workspace-controls { display: flex; align-items: center; gap: 2px; margin-left: auto; }
 .workspace-controls > button { height: 30px; border: 0; background: transparent; border-radius: 6px; padding: 0 8px; font-size: 11px; display: flex; align-items: center; gap: 5px; color: var(--muted); }
 .workspace-controls > button:hover { background: var(--surface-subtle); color: var(--text); }
+.workspace-controls > button.intervene-control.has-attention { color: var(--amber); background: color-mix(in srgb, var(--amber) 8%, transparent); }
+.workspace-controls > button.intervene-control i { min-width: 15px; height: 15px; display: grid; place-items: center; border-radius: 8px; color: #24252d; background: var(--amber); font-size: 8px; font-style: normal; font-weight: 750; }
 .workspace-controls > button.run-primary { background: #171922; color: #fff; padding: 0 11px; }
 .workspace-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .workspace-content > .loop-workspace-canvas { flex: 1; min-height: 0; }
@@ -33,4 +35,4 @@
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 1050px) { .workspace-progress { display: none; } .workspace-identity strong { max-width: 135px; } }
 @media (max-width: 780px) { .workspace-header { padding-left: 48px; } .workspace-back { font-size: 0; padding: 0 5px; } .workspace-back svg { width: 17px; height: 17px; } .workspace-identity { border: 0; padding: 0; min-width: 0; flex: 1; } .workspace-identity strong { max-width: 160px; } .workspace-controls > button span, .workspace-controls > .ui-button:not(:last-child) { display: none; } .workspace-controls > button { width: 30px; padding: 0; justify-content: center; } .workspace-controls > button.run-primary { width: auto; padding: 0 9px; } }
-@media (max-width: 520px) { .workspace-identity .workflow-state { display: none; } .workspace-controls > button:not(.run-primary):not(:last-child) { display: none; } }
+@media (max-width: 520px) { .workspace-identity .workflow-state { display: none; } .workspace-controls > button:not(.run-primary):not(.intervene-control):not(:last-child) { display: none; } }

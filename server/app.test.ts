@@ -127,4 +127,41 @@ describe("Codex Loop API and persistence", () => {
     expect(missing.response.status).toBe(404);
     expect(missing.body.error).toContain("was not found");
   });
+
+  it("creates explicit context interventions and rejects stale turn steering", async () => {
+    const created = await json<Workflow>("/api/workflows/generate", { method: "POST", body: JSON.stringify({ task: "Intervention API" }) });
+    const running = await store.mutateWorkflow(created.body.id, (workflow) => {
+      workflow.status = "running";
+      workflow.runs.push({ id: "run-api", status: "running", step: 0, startedAt: new Date().toISOString() });
+      workflow.threads[0].codex = { state: "running", threadId: "native-api", activeTurnId: "turn-current" };
+    });
+    const context = await json<Workflow>(`/api/workflows/${running.id}/interventions`, {
+      method: "POST",
+      body: JSON.stringify({ runId: "run-api", idempotencyKey: "api-context", delivery: "context", message: "Honor the user constraint.", recipientNodeIds: [running.nodes[0].id] }),
+    });
+    expect(context.response.status).toBe(201);
+    expect(context.body.interventions.find((record) => record.idempotencyKey === "api-context")?.status).toBe("delivered");
+    expect(context.body.contextBlocks.some((block) => block.createdBy === "manual" && block.summary === "Honor the user constraint.")).toBe(true);
+
+    const stale = await json<{ error: string }>(`/api/workflows/${running.id}/interventions`, {
+      method: "POST",
+      body: JSON.stringify({ runId: "run-api", idempotencyKey: "api-stale", delivery: "steer", message: "Steer this turn.", threadId: running.threads[0].id, expectedTurnId: "turn-stale" }),
+    });
+    expect(stale.response.status).toBe(409);
+    expect(stale.body.error).toContain("changed");
+
+    const invalidQueue = await json<{ error: string }>(`/api/workflows/${running.id}/interventions`, {
+      method: "POST",
+      body: JSON.stringify({ runId: "run-api", idempotencyKey: "api-invalid", delivery: "queue", message: "Missing a target." }),
+    });
+    expect(invalidQueue.response.status).toBe(400);
+    expect(invalidQueue.body.error).toBe("Invalid request");
+
+    const missingAttention = await json<{ error: string }>(`/api/workflows/${running.id}/attention/missing/respond`, {
+      method: "POST",
+      body: JSON.stringify({ runId: "run-api", expectedTurnId: "turn-current", answers: { choice: "Safe" } }),
+    });
+    expect(missingAttention.response.status).toBe(404);
+    expect(missingAttention.body.error).toContain("was not found");
+  });
 });

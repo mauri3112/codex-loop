@@ -1,5 +1,21 @@
 import type { AppData, Workflow, WorkflowRunConfiguration } from "../domain/types";
 
+export interface CreateInterventionInput {
+  runId: string;
+  idempotencyKey: string;
+  delivery: "steer" | "queue" | "context";
+  message: string;
+  threadId?: string;
+  expectedTurnId?: string;
+  recipientNodeIds?: string[];
+}
+
+export interface RespondToAttentionInput {
+  runId: string;
+  expectedTurnId?: string;
+  answers: Record<string, string | string[]>;
+}
+
 export interface BridgeStatus {
   state: "disconnected" | "connecting" | "connected" | "failed";
   error?: string;
@@ -7,7 +23,17 @@ export interface BridgeStatus {
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) } });
-  if (!response.ok) throw new Error((await response.text()) || `Request failed: ${response.status}`);
+  if (!response.ok) {
+    const body = await response.text();
+    try {
+      const parsed = JSON.parse(body) as { error?: unknown };
+      if (typeof parsed.error === "string" && parsed.error) throw new Error(parsed.error);
+    } catch (error) {
+      if (error instanceof SyntaxError) throw new Error(body || `Request failed: ${response.status}`);
+      throw error;
+    }
+    throw new Error(body || `Request failed: ${response.status}`);
+  }
   return response.json() as Promise<T>;
 }
 
@@ -25,4 +51,6 @@ export const api = {
   sendInstruction: (workflowId: string, threadId: string, instruction: string) => request<Workflow>(`/api/workflows/${workflowId}/threads/${threadId}/turn`, { method: "POST", body: JSON.stringify({ instruction }) }),
   stopThread: (workflowId: string, threadId: string) => request<Workflow>(`/api/workflows/${workflowId}/threads/${threadId}/stop`, { method: "POST", body: JSON.stringify({}) }),
   resolveApproval: (workflowId: string, threadId: string, decision: "accept" | "decline") => request<Workflow>(`/api/workflows/${workflowId}/threads/${threadId}/approval`, { method: "POST", body: JSON.stringify({ decision }) }),
+  createIntervention: (workflowId: string, input: CreateInterventionInput) => request<Workflow>(`/api/workflows/${workflowId}/interventions`, { method: "POST", body: JSON.stringify(input) }),
+  respondToAttention: (workflowId: string, attentionId: string, input: RespondToAttentionInput) => request<Workflow>(`/api/workflows/${workflowId}/attention/${attentionId}/respond`, { method: "POST", body: JSON.stringify(input) }),
 };

@@ -36,6 +36,7 @@ export interface CodexAppServerOptions {
   onNotification?: (notification: AppServerNotification) => void | Promise<void>;
   onRequest?: (request: AppServerRequest) => void | Promise<void>;
   onStderr?: (line: string) => void;
+  onExit?: (error: Error) => void | Promise<void>;
 }
 
 export interface ThreadStartResult {
@@ -52,14 +53,16 @@ export class CodexAppServerClient {
   private process?: ChildProcessWithoutNullStreams;
   private ready?: Promise<void>;
   private nextId = 1;
+  private closing = false;
   private readonly pending = new Map<RequestId, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
 
   constructor(private readonly options: CodexAppServerOptions = {}) {}
 
-  setHandlers(handlers: Pick<CodexAppServerOptions, "onNotification" | "onRequest" | "onStderr">): void {
+  setHandlers(handlers: Pick<CodexAppServerOptions, "onNotification" | "onRequest" | "onStderr" | "onExit">): void {
     this.options.onNotification = handlers.onNotification;
     this.options.onRequest = handlers.onRequest;
     this.options.onStderr = handlers.onStderr;
+    this.options.onExit = handlers.onExit;
   }
 
   async connect(): Promise<void> {
@@ -82,16 +85,23 @@ export class CodexAppServerClient {
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.process = child;
+    let exitReported = false;
+    const reportExit = (error: Error) => {
+      if (exitReported) return;
+      exitReported = true;
+      this.failAll(error);
+      if (!this.closing) void this.options.onExit?.(error);
+    };
 
     const lines = readline.createInterface({ input: child.stdout });
     lines.on("line", (line) => this.handleLine(line));
     const errors = readline.createInterface({ input: child.stderr });
     errors.on("line", (line) => this.options.onStderr?.(line));
-    child.once("error", (error) => this.failAll(error));
+    child.once("error", reportExit);
     child.once("exit", (code, signal) => {
       this.process = undefined;
       this.ready = undefined;
-      this.failAll(new Error(`codex app-server exited (${signal ?? code ?? "unknown"})`));
+      reportExit(new Error(`codex app-server exited (${signal ?? code ?? "unknown"})`));
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -204,10 +214,15 @@ export class CodexAppServerClient {
     this.process = undefined;
     this.ready = undefined;
     if (!child || child.exitCode !== null) return;
-    await new Promise<void>((resolve) => {
-      child.once("exit", () => resolve());
-      if (!child.kill("SIGTERM") || child.exitCode !== null) resolve();
-    });
+    this.closing = true;
+    try {
+      await new Promise<void>((resolve) => {
+        child.once("exit", () => resolve());
+        if (!child.kill("SIGTERM") || child.exitCode !== null) resolve();
+      });
+    } finally {
+      this.closing = false;
+    }
   }
 }
 

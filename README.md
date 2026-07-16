@@ -35,6 +35,10 @@ npm test
 npm start
 ```
 
+## Documentation
+
+- [Attention and intervention](docs/attention-and-intervention.md) documents native user-input handling, proactive guardrails, operator semantics, security invariants, and the prioritized follow-up backlog.
+
 ## Run modes
 
 The split **Run** control supports three persisted modes:

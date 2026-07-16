@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
-import { CircleStop, MoreHorizontal, Pause, Play, RotateCcw, Save, Sparkles } from "lucide-react";
-import { api } from "./api/client";
+import { CircleStop, MessageSquareMore, MoreHorizontal, Pause, Play, RotateCcw, Save, Sparkles } from "lucide-react";
+import { api, type CreateInterventionInput, type RespondToAttentionInput } from "./api/client";
 import { ActivityPanel } from "./components/activity/ActivityPanel";
 import { LoopWorkspaceCanvas } from "./components/canvas";
 import { LoopLanding, type LoopTemplateItem } from "./components/landing/LoopLanding";
+import { AttentionBanner, InterventionDrawer } from "./components/intervention/InterventionCenter";
 import { RunControl } from "./components/run/RunControl";
 import { CodexShell, type ShellSection } from "./components/shell/CodexShell";
 import { AgentThreadView } from "./components/thread/AgentThreadView";
@@ -38,21 +39,26 @@ interface WorkspaceProps {
   onSave: (workflow: Workflow) => Promise<void>;
   onRunAction: (workflow: Workflow, action: "start" | "pause" | "resume" | "stop" | "reset") => Promise<void>;
   onConfigureRun: (workflow: Workflow, configuration: WorkflowRunConfiguration) => Promise<void>;
+  onIntervene: (workflow: Workflow, input: CreateInterventionInput) => Promise<void>;
+  onRespondToAttention: (workflow: Workflow, attentionId: string, input: RespondToAttentionInput) => Promise<void>;
   onOpenThread: (id: string) => void;
 }
 
-function Workspace({ data, onChange, onSave, onRunAction, onConfigureRun, onOpenThread }: WorkspaceProps) {
+function Workspace({ data, onChange, onSave, onRunAction, onConfigureRun, onIntervene, onRespondToAttention, onOpenThread }: WorkspaceProps) {
   const { workflowId = "" } = useParams();
   const navigate = useNavigate();
   const workflow = data.workflows.find((item) => item.id === workflowId);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [activityOpen, setActivityOpen] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [interventionOpen, setInterventionOpen] = useState(false);
+  const [initialAttentionId, setInitialAttentionId] = useState<string>();
   if (!workflow) return <main className="workflow-missing"><h1>Workflow not found</h1><button onClick={() => navigate("/loop")}>Return to Loop</button></main>;
 
   const run = workflow.runs.at(-1);
   const completed = workflow.nodes.filter((node) => node.status === "completed").length;
   const progress = workflow.nodes.length ? Math.round(workflow.nodes.reduce((sum, node) => sum + node.progress, 0) / workflow.nodes.length) : 0;
+  const openAttentionRequests = workflow.attentionRequests.filter((request) => request.status === "open");
   const runAction = (action: "start" | "pause" | "resume" | "stop" | "reset") => onRunAction(workflow, action);
   const save = async () => { setSaving(true); try { await onSave(workflow); } finally { setSaving(false); } };
   const selectFromActivity = (nodeId: string) => setSelection({ type: "agent", id: nodeId });
@@ -65,10 +71,12 @@ function Workspace({ data, onChange, onSave, onRunAction, onConfigureRun, onOpen
         <div className="workspace-controls">
           {!run || ["stopped", "completed"].includes(run.status) ? <RunControl configuration={workflow.runConfiguration} onStart={() => runAction("start")} onSave={(configuration) => onConfigureRun(workflow, configuration)} /> : run.status === "paused" ? <button className="run-primary" onClick={() => void runAction("resume")}><Play size={14} /> Resume</button> : <button onClick={() => void runAction("pause")}><Pause size={14} /> Pause</button>}
           {run && ["running", "paused"].includes(run.status) && <button onClick={() => void runAction("stop")} title="Stop workflow"><CircleStop size={14} /><span>Stop</span></button>}
+          <button className={openAttentionRequests.length > 0 ? "intervene-control has-attention" : "intervene-control"} onClick={() => { setInitialAttentionId(undefined); setInterventionOpen(true); }} title="Intervene in this run"><MessageSquareMore size={14} /><span>Intervene</span>{openAttentionRequests.length > 0 ? <i>{openAttentionRequests.length}</i> : null}</button>
           <button onClick={() => void runAction("reset")} title="Reset workflow"><RotateCcw size={14} /><span>Reset</span></button>
           <Button variant="secondary" onClick={save} loading={saving}><Save size={14} />{workflow.saved ? "Saved" : "Save"}</Button>
         </div>
       </header>
+      <AttentionBanner requests={openAttentionRequests} onOpen={(attentionId) => { setInitialAttentionId(attentionId); setInterventionOpen(true); }} />
       <div className="workspace-content">
         <LoopWorkspaceCanvas workflow={workflow} selection={selection} onSelectionChange={setSelection} onWorkflowChange={onChange} onOpenThread={onOpenThread} />
         <ActivityPanel
@@ -81,6 +89,14 @@ function Workspace({ data, onChange, onSave, onRunAction, onConfigureRun, onOpen
           onSelectContext={(id) => setSelection({ type: "context", id })}
         />
       </div>
+      <InterventionDrawer
+        workflow={workflow}
+        open={interventionOpen}
+        initialAttentionId={initialAttentionId}
+        onClose={() => setInterventionOpen(false)}
+        onIntervene={(input) => onIntervene(workflow, input)}
+        onRespond={(attentionId, input) => onRespondToAttention(workflow, attentionId, input)}
+      />
     </main>
   );
 }
@@ -109,7 +125,9 @@ export function App() {
 
   const routeWorkflowId = location.pathname.match(/^\/loop\/([^/]+)/)?.[1];
   const activeWorkflow = data?.workflows.find((item) => item.id === routeWorkflowId);
-  const hasLiveCodexWork = data?.workflows.some((workflow) => workflow.status === "running" || workflow.threads.some((thread) => ["starting", "running"].includes(thread.codex?.state ?? "")));
+  const hasLiveCodexWork = data?.workflows.some((workflow) => workflow.status === "running"
+    || workflow.attentionRequests.some((request) => request.status === "open")
+    || workflow.threads.some((thread) => ["starting", "running"].includes(thread.codex?.state ?? "")));
   useEffect(() => {
     if (!hasLiveCodexWork) return;
     const timer = window.setInterval(() => { void refresh(); }, 800);
@@ -146,6 +164,12 @@ export function App() {
       throw reason;
     }
   };
+  const intervene = async (workflow: Workflow, input: CreateInterventionInput) => {
+    replaceWorkflow(await api.createIntervention(workflow.id, input));
+  };
+  const respondToAttention = async (workflow: Workflow, attentionId: string, input: RespondToAttentionInput) => {
+    replaceWorkflow(await api.respondToAttention(workflow.id, attentionId, input));
+  };
   const sendInstruction = async (workflowId: string, threadId: string, instruction: string) => {
     replaceWorkflow(await api.sendInstruction(workflowId, threadId, instruction));
   };
@@ -181,7 +205,7 @@ export function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/loop" replace />} />
         <Route path="/loop" element={data.workflows.length > 0 ? <Navigate to={`/loop/${data.workflows[0].id}`} replace /> : <LoopLanding generating={generating} recentWorkflows={[]} savedWorkflows={[]} templates={data.templates} onCreate={() => void create()} onGenerate={(task) => void generate(task)} onOpenWorkflow={(id) => navigate(`/loop/${id}`)} onUseTemplate={(template: LoopTemplateItem) => void generate(template.title)} />} />
-        <Route path="/loop/:workflowId" element={<Workspace data={data} onChange={changeWorkflow} onSave={save} onRunAction={runAction} onConfigureRun={configureRun} onOpenThread={(id) => navigate(`/threads/${id}`)} />} />
+        <Route path="/loop/:workflowId" element={<Workspace data={data} onChange={changeWorkflow} onSave={save} onRunAction={runAction} onConfigureRun={configureRun} onIntervene={intervene} onRespondToAttention={respondToAttention} onOpenThread={(id) => navigate(`/threads/${id}`)} />} />
         <Route path="/threads/:threadId" element={<ThreadRoute data={data} onSend={sendInstruction} onStop={stopThread} onResolveApproval={resolveApproval} />} />
         <Route path="/threads" element={<StaticCodexScreen section="threads" />} />
         <Route path="/scheduled" element={<StaticCodexScreen section="scheduled" />} />

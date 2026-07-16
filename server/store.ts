@@ -146,9 +146,12 @@ function preserveActiveRuntime(current: Workflow, incoming: Workflow): Workflow 
         finalOutput: runtime.finalOutput,
         codex: runtime.codex,
         pendingApproval: runtime.pendingApproval,
+        lastActivityAt: runtime.lastActivityAt,
       } : thread;
     }),
     runs: current.runs,
     events: current.events,
+    attentionRequests: current.attentionRequests,
+    interventions: current.interventions,
   };
 }
