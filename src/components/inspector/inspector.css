@@ -374,6 +374,28 @@
   line-height: 1.45;
 }
 
+.loop-delete-agent-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 34px;
+  padding: 7px 10px;
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 6%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--red) 30%, var(--border));
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.loop-delete-agent-button:hover {
+  color: color-mix(in srgb, var(--red) 86%, white);
+  background: color-mix(in srgb, var(--red) 11%, var(--surface));
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+}
+
 .loop-inspector-empty {
   padding: 10px;
   text-align: center;

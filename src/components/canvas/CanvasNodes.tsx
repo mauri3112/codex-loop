@@ -1,5 +1,5 @@
 import { memo, type CSSProperties } from "react";
-import { Database, Eye, ExternalLink, LockKeyhole } from "lucide-react";
+import { Database, Eye, ExternalLink, LockKeyhole, X } from "lucide-react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import type { AgentFlowNode, ContextFlowNode, ObserverFlowNode } from "./types";
 import { celestialVisualFor, defaultReasoningEffort, effortLabel } from "./celestial";
@@ -32,6 +32,20 @@ function AgentNodeView({ data, selected }: NodeProps<AgentFlowNode>) {
       aria-label={`${agent.name}, ${celestial.label}, ${effortLabel(effort)} effort, ${statusLabels[agent.status]}`}
       aria-describedby={tooltipId}
     >
+      {selected && data.onRequestDelete ? (
+        <button
+          className="loop-node-delete nodrag nopan"
+          type="button"
+          aria-label={`Delete ${agent.name}`}
+          title="Delete agent"
+          onClick={(event) => {
+            event.stopPropagation();
+            data.onRequestDelete?.(agent.id);
+          }}
+        >
+          <X size={13} aria-hidden="true" />
+        </button>
+      ) : null}
       <Handle className="loop-port loop-port-input" type="target" position={Position.Left} />
       <div className="loop-celestial-orbit" style={{ "--node-progress": `${Math.max(0, Math.min(100, agent.progress)) * 3.6}deg` } as CSSProperties}>
         <span className="loop-node-number" aria-hidden="true">{order}</span>

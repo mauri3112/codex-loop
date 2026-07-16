@@ -18,6 +18,7 @@ export interface SelectionInspectorProps {
   selection: Selection;
   onWorkflowChange: (workflow: Workflow) => void;
   onSelectionChange?: (selection: Selection) => void;
+  onRequestDeleteAgent?: (nodeId: string) => void;
 }
 
 interface FieldProps {
@@ -220,10 +221,11 @@ function EnvironmentVariables({ variables, onChange }: {
   );
 }
 
-function AgentInspector({ workflow, agent, update }: {
+function AgentInspector({ workflow, agent, update, onRequestDelete }: {
   workflow: Workflow;
   agent: AgentNode;
   update: (agent: AgentNode, nextWorkflow?: Workflow) => void;
+  onRequestDelete?: (nodeId: string) => void;
 }) {
   const setContextAccess = (blockId: string, allowed: boolean) => {
     const readableContextBlockIds = allowed
@@ -274,6 +276,14 @@ function AgentInspector({ workflow, agent, update }: {
             <CheckRow key={block.id} checked={agent.readableContextBlockIds.includes(block.id)} label={block.title} detail={block.category.replaceAll("-", " ")} onChange={(allowed) => setContextAccess(block.id, allowed)} />
           )) : <p className="loop-inspector-empty">No shared context blocks yet.</p>}
         </Section>
+        {onRequestDelete ? (
+          <Section title="Danger zone">
+            <p className="loop-inspector-note">Remove this Agent, its thread, and every connected handoff from the workflow.</p>
+            <button className="loop-delete-agent-button" type="button" onClick={() => onRequestDelete(agent.id)}>
+              <Trash2 size={14} aria-hidden="true" /> Delete agent node
+            </button>
+          </Section>
+        ) : null}
       </div>
     </>
   );
@@ -375,14 +385,14 @@ function ContextInspector({ workflow, block, update }: { workflow: Workflow; blo
   );
 }
 
-export function SelectionInspector({ workflow, selection, onWorkflowChange, onSelectionChange }: SelectionInspectorProps) {
+export function SelectionInspector({ workflow, selection, onWorkflowChange, onSelectionChange, onRequestDeleteAgent }: SelectionInspectorProps) {
   const close = onSelectionChange ? () => onSelectionChange({ type: "workflow", id: workflow.id }) : undefined;
   const emit = (next: Workflow) => onWorkflowChange({ ...next, updatedAt: new Date().toISOString() });
 
   let content: ReactNode;
   if (selection.type === "agent") {
     const agent = workflow.nodes.find((node) => node.id === selection.id);
-    content = agent ? <AgentInspector workflow={workflow} agent={agent} update={(nextAgent, base = workflow) => {
+    content = agent ? <AgentInspector workflow={workflow} agent={agent} onRequestDelete={onRequestDeleteAgent} update={(nextAgent, base = workflow) => {
       const nodes = base.nodes.map((node) => node.id === nextAgent.id ? nextAgent : node);
       const threads = base.threads.map((thread) => thread.nodeId === nextAgent.id ? {
         ...thread,

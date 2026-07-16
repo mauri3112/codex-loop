@@ -7,7 +7,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Bot, Eye, Link2, Maximize2, Minus, Plus, Settings2, X } from "lucide-react";
+import { Bot, Eye, Link2, Maximize2, Minus, Plus, Settings2, Trash2, X } from "lucide-react";
 import {
   Background,
   BackgroundVariant,
@@ -36,6 +36,7 @@ import type {
   WorkflowEdge,
 } from "../../domain/types";
 import { COMPACT_AGENT_SIZE, createLoopSupervisor } from "../../domain/normalize";
+import { removeAgentNode } from "../../domain/workflow";
 import { SelectionInspector } from "../inspector/SelectionInspector";
 import { AgentCanvasNode, ContextCanvasNode, ObserverCanvasNode } from "./CanvasNodes";
 import { WorkflowCanvasEdge } from "./WorkflowEdge";
@@ -153,6 +154,7 @@ function LoopWorkspaceCanvasInner({
   const [observerDrawMode, setObserverDrawMode] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false);
+  const [pendingDeleteNodeId, setPendingDeleteNodeId] = useState<string | null>(null);
   const [connectSource, setConnectSource] = useState(workflow.nodes[0]?.id ?? "");
   const [connectTarget, setConnectTarget] = useState(workflow.nodes[1]?.id ?? "");
   const [drawPreview, setDrawPreview] = useState<DrawPreview | null>(null);
@@ -161,6 +163,38 @@ function LoopWorkspaceCanvasInner({
   const emit = useCallback((next: Workflow) => {
     onWorkflowChange({ ...next, updatedAt: new Date().toISOString() });
   }, [onWorkflowChange]);
+
+  const requestDeleteAgent = useCallback((nodeId: string) => {
+    setPendingDeleteNodeId(nodeId);
+  }, []);
+
+  const pendingDeleteAgent = pendingDeleteNodeId
+    ? workflow.nodes.find((node) => node.id === pendingDeleteNodeId)
+    : undefined;
+  const pendingDeleteEdgeCount = pendingDeleteAgent
+    ? workflow.edges.filter((edge) => edge.source === pendingDeleteAgent.id || edge.target === pendingDeleteAgent.id).length
+    : 0;
+
+  useEffect(() => {
+    if (!pendingDeleteAgent) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPendingDeleteNodeId(null);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [pendingDeleteAgent]);
+
+  const confirmDeleteAgent = useCallback(() => {
+    if (!pendingDeleteNodeId) return;
+    const nextWorkflow = removeAgentNode(workflow, pendingDeleteNodeId);
+    emit(nextWorkflow);
+    onSelectionChange({ type: "workflow", id: workflow.id });
+    setConnectSource(nextWorkflow.nodes[0]?.id ?? "");
+    setConnectTarget(nextWorkflow.nodes[1]?.id ?? "");
+    setConnectOpen(false);
+    setMobileInspectorOpen(false);
+    setPendingDeleteNodeId(null);
+  }, [emit, onSelectionChange, pendingDeleteNodeId, workflow]);
 
   const mappedNodes = useMemo<LoopFlowNode[]>(() => [
     ...workflow.observers.map<LoopFlowNode>((observer) => ({
@@ -187,12 +221,13 @@ function LoopWorkspaceCanvasInner({
         agent,
         order: index + 1,
         onOpenThread,
+        onRequestDelete: requestDeleteAgent,
       },
       selected: selection?.type === "agent" && selection.id === agent.id,
       zIndex: 2,
       ariaLabel: `Agent ${agent.name}, ${agent.status}`,
     })),
-  ], [onOpenThread, selection, workflow.nodes, workflow.observers]);
+  ], [onOpenThread, requestDeleteAgent, selection, workflow.nodes, workflow.observers]);
 
   const mappedEdges = useMemo<LoopFlowEdge[]>(() => workflow.edges.map((edge) => ({
     id: flowId.edge(edge.id),
@@ -443,8 +478,26 @@ function LoopWorkspaceCanvasInner({
         selection={activeSelection}
         onWorkflowChange={emit}
         onSelectionChange={onSelectionChange}
+        onRequestDeleteAgent={requestDeleteAgent}
       />
       <button className="loop-mobile-inspector-close" type="button" aria-label="Close inspector" onClick={() => setMobileInspectorOpen(false)}><X size={15} /></button>
+      {pendingDeleteAgent ? (
+        <div className="loop-delete-dialog-backdrop" role="presentation" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) setPendingDeleteNodeId(null);
+        }}>
+          <section className="loop-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="loop-delete-dialog-title" aria-describedby="loop-delete-dialog-description">
+            <span className="loop-delete-dialog-icon"><Trash2 size={18} aria-hidden="true" /></span>
+            <div>
+              <h2 id="loop-delete-dialog-title">Delete {pendingDeleteAgent.name}?</h2>
+              <p id="loop-delete-dialog-description">This removes the Agent, its thread, {pendingDeleteEdgeCount} connected handoff{pendingDeleteEdgeCount === 1 ? "" : "s"}, and its context permissions. This action cannot be undone.</p>
+            </div>
+            <footer>
+              <button type="button" autoFocus onClick={() => setPendingDeleteNodeId(null)}>Cancel</button>
+              <button className="is-danger" type="button" onClick={confirmDeleteAgent}><Trash2 size={14} aria-hidden="true" /> Delete node</button>
+            </footer>
+          </section>
+        </div>
+      ) : null}
     </section>
   );
 }

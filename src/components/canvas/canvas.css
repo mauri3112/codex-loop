@@ -102,6 +102,31 @@
   transform: translateY(-1px);
 }
 
+.loop-node-delete {
+  position: absolute;
+  z-index: 18;
+  top: -8px;
+  right: -4px;
+  display: grid;
+  place-items: center;
+  width: 23px;
+  height: 23px;
+  padding: 0;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  box-shadow: 0 3px 10px rgba(20, 20, 18, 0.16);
+}
+
+.loop-node-delete:hover,
+.loop-node-delete:focus-visible {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 7%, var(--surface));
+  border-color: color-mix(in srgb, var(--red) 50%, var(--border));
+  outline: none;
+}
+
 .loop-node-header {
   display: flex;
   align-items: center;
@@ -675,6 +700,89 @@
   pointer-events: none;
   transform: translate(-50%, -50%);
 }
+
+.loop-delete-dialog-backdrop {
+  position: fixed;
+  z-index: 700;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(12, 13, 17, 0.58);
+  backdrop-filter: blur(3px);
+}
+
+.loop-delete-dialog {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+  width: min(430px, 100%);
+  padding: 20px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
+}
+
+.loop-delete-dialog-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 9%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--red) 24%, var(--border));
+  border-radius: 9px;
+}
+
+.loop-delete-dialog h2 {
+  margin: 1px 0 7px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.loop-delete-dialog p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.loop-delete-dialog footer {
+  display: flex;
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.loop-delete-dialog footer button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 12px;
+  color: var(--muted);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 580;
+}
+
+.loop-delete-dialog footer button:hover { color: var(--text); border-color: var(--border-strong); }
+.loop-delete-dialog footer button:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent); outline-offset: 2px; }
+
+.loop-delete-dialog footer .is-danger {
+  color: white;
+  background: var(--red);
+  border-color: var(--red);
+}
+
+.loop-delete-dialog footer .is-danger:hover { color: white; filter: brightness(1.06); }
 
 @media (max-width: 1050px) {
   .loop-workspace-canvas { grid-template-columns: minmax(0, 1fr); }

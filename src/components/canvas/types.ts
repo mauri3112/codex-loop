@@ -14,6 +14,7 @@ export interface AgentNodeData extends Record<string, unknown> {
   agent: AgentNode;
   order: number;
   onOpenThread?: (threadId: string) => void;
+  onRequestDelete?: (nodeId: string) => void;
 }
 
 export interface ContextNodeData extends Record<string, unknown> {
