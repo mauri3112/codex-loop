@@ -92,6 +92,17 @@ export function createApp(store = new JsonWorkflowStore(), bridge: CodexBridgeSe
     }),
   );
 
+  app.get(
+    "/api/task-capabilities",
+    asyncRoute(async (_request, response) => {
+      if (!bridge.listTaskCapabilities) {
+        response.status(501).json({ error: "This Codex bridge cannot list task capabilities" });
+        return;
+      }
+      response.json(await bridge.listTaskCapabilities());
+    }),
+  );
+
   app.put(
     "/api/workflows/:id/run-configuration",
     asyncRoute(async (request, response) => {

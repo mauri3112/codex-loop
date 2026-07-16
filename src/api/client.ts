@@ -1,4 +1,5 @@
 import type { AppData, Workflow, WorkflowRunConfiguration } from "../domain/types";
+import type { TaskCapabilitiesResponse } from "../domain/task-capabilities";
 
 export interface CreateInterventionInput {
   runId: string;
@@ -46,6 +47,7 @@ export const api = {
   save: (id: string) => request<Workflow>(`/api/workflows/${id}/save`, { method: "POST" }),
   bridgeStatus: () => request<BridgeStatus>("/api/bridge/status"),
   connectBridge: () => request<BridgeStatus>("/api/bridge/connect", { method: "POST", body: JSON.stringify({}) }),
+  taskCapabilities: () => request<TaskCapabilitiesResponse>("/api/task-capabilities"),
   runAction: (id: string, action: "start" | "pause" | "resume" | "stop" | "reset") => request<Workflow>(`/api/workflows/${id}/run/${action}`, { method: "POST", body: JSON.stringify({}) }),
   configureRun: (id: string, runConfiguration: WorkflowRunConfiguration) => request<Workflow>(`/api/workflows/${id}/run-configuration`, { method: "PUT", body: JSON.stringify(runConfiguration) }),
   sendInstruction: (workflowId: string, threadId: string, instruction: string) => request<Workflow>(`/api/workflows/${workflowId}/threads/${threadId}/turn`, { method: "POST", body: JSON.stringify({ instruction }) }),

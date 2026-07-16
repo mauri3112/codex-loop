@@ -10,6 +10,7 @@ import type {
   WorkflowEdge,
 } from "../../domain/types";
 import { AGENT_MODELS, EFFORT_LEVELS, defaultReasoningEffort, effortLabel } from "../../domain/models";
+import { SlashAutocompleteTextArea } from "../ui/SlashAutocompleteTextArea";
 import "./inspector.css";
 
 export interface SelectionInspectorProps {
@@ -248,7 +249,11 @@ function AgentInspector({ workflow, agent, update }: {
               <option value="investigator">Investigator</option><option value="implementer">Implementer</option><option value="tester">Tester</option><option value="reviewer">Reviewer</option><option value="custom">Custom</option>
             </select>
           </Field>
-          <Field label="Task"><TextArea value={agent.task} rows={5} onChange={(task) => update({ ...agent, task })} /></Field>
+          <div className="loop-inspector-field">
+            <span>Task</span>
+            <SlashAutocompleteTextArea value={agent.task} rows={5} placeholder="Describe the task, or type / for capabilities…" onChange={(task) => update({ ...agent, task })} />
+            <small>Type / to add a skill, computer use, or MCP server.</small>
+          </div>
           <Field label="Definition of done"><TextArea value={agent.definitionOfDone} rows={4} onChange={(definitionOfDone) => update({ ...agent, definitionOfDone })} /></Field>
         </Section>
         <Section title="Runtime">

@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { AgentNode, AttentionQuestion, AuditEvent, ContextBlock, InterventionDelivery, ThreadRecord, Workflow } from "../src/domain/types.js";
+import type { TaskCapabilitiesResponse, TaskCapability } from "../src/domain/task-capabilities.js";
 import { CodexAppServerClient, type AppServerNotification, type AppServerRequest, textInput } from "./codex-app-server.js";
 import { JsonWorkflowStore } from "./store.js";
 
@@ -11,6 +12,7 @@ export interface BridgeStatus {
 export interface CodexBridgeService {
   status(): BridgeStatus;
   connect(): Promise<BridgeStatus>;
+  listTaskCapabilities?(): Promise<TaskCapabilitiesResponse>;
   startWorkflow(workflowId: string, invocation?: RunInvocation): Promise<Workflow>;
   pauseWorkflow(workflowId: string): Promise<Workflow>;
   resumeWorkflow(workflowId: string): Promise<Workflow>;
@@ -65,6 +67,26 @@ export interface RunInvocation {
   input?: Record<string, string | number | boolean | null>;
 }
 
+interface SkillsListResponse {
+  data: Array<{
+    skills: Array<{
+      name: string;
+      description: string;
+      shortDescription?: string | null;
+      enabled: boolean;
+      interface?: { displayName?: string | null; shortDescription?: string | null } | null;
+    }>;
+  }>;
+}
+
+interface McpServerStatusResponse {
+  data: Array<{
+    name: string;
+    tools: Record<string, unknown>;
+    serverInfo?: { title?: string | null; description?: string | null } | null;
+  }>;
+}
+
 interface ThreadLocation { workflowId: string; threadId: string }
 
 const now = () => new Date().toISOString();
@@ -98,6 +120,52 @@ export class CodexBridge implements CodexBridgeService {
 
   status(): BridgeStatus {
     return { ...this.bridgeStatus };
+  }
+
+  async listTaskCapabilities(): Promise<TaskCapabilitiesResponse> {
+    await this.connect();
+    const warnings: string[] = [];
+    const [skillsResult, mcpResult] = await Promise.allSettled([
+      this.client.request<SkillsListResponse>("skills/list", { cwds: [process.cwd()] }),
+      this.client.request<McpServerStatusResponse>("mcpServerStatus/list", { detail: "toolsAndAuthOnly", limit: 100 }),
+    ]);
+    const items: TaskCapability[] = [];
+
+    if (skillsResult.status === "fulfilled") {
+      const seen = new Set<string>();
+      for (const skill of skillsResult.value.data.flatMap((entry) => entry.skills)) {
+        if (!skill.enabled || seen.has(skill.name)) continue;
+        seen.add(skill.name);
+        const isComputerUse = /computer[\s_-]*use/i.test(`${skill.name} ${skill.interface?.displayName ?? ""}`);
+        items.push({
+          id: `${isComputerUse ? "computer-use" : "skill"}:${skill.name}`,
+          kind: isComputerUse ? "computer-use" : "skill",
+          label: skill.interface?.displayName?.trim() || (isComputerUse ? "Computer use" : skill.name),
+          description: skill.interface?.shortDescription?.trim() || skill.shortDescription?.trim() || skill.description.trim(),
+          invocation: `$${skill.name} `,
+        });
+      }
+    } else {
+      warnings.push(`Skills unavailable: ${errorMessage(skillsResult.reason)}`);
+    }
+
+    if (mcpResult.status === "fulfilled") {
+      for (const server of mcpResult.value.data) {
+        const label = server.serverInfo?.title?.trim() || server.name;
+        const toolCount = Object.keys(server.tools).length;
+        items.push({
+          id: `mcp:${server.name}`,
+          kind: "mcp",
+          label,
+          description: server.serverInfo?.description?.trim() || `${toolCount} MCP ${toolCount === 1 ? "tool" : "tools"} available`,
+          invocation: `Use the ${label} MCP server to `,
+        });
+      }
+    } else {
+      warnings.push(`MCP servers unavailable: ${errorMessage(mcpResult.reason)}`);
+    }
+
+    return { items, source: "codex", ...(warnings.length ? { warnings } : {}) };
   }
 
   async connect(): Promise<BridgeStatus> {
