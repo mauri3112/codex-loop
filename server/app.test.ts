@@ -37,6 +37,12 @@ describe("Codex Loop API and persistence", () => {
     return { response, body: (await response.json()) as T };
   }
 
+  it("reports the running release metadata", async () => {
+    const { response, body } = await json<{ version: string; revision: string; builtAt: string }>("/api/version");
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ version: "development", revision: "unknown", builtAt: "unknown" });
+  });
+
   it("seeds templates, manual threads, and a complete five-agent workflow", async () => {
     const { response, body } = await json<AppData>("/api/data");
     expect(response.status).toBe(200);

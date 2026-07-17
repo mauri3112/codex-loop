@@ -35,6 +35,35 @@ npm test
 npm start
 ```
 
+## Always-current home-server deployment
+
+Every successful push to `main` runs tests and a production build, publishes a
+multi-architecture image to GitHub Container Registry, and creates a matching
+GitHub release named `v1.0.<workflow-run-number>`. The `latest` image always
+points to that release.
+
+This Mac runs the published image through Docker Compose. The scoped updater
+checks GHCR every five minutes and recreates only the Codex Loop container when
+a new healthy image is available. Workflow data, the Codex home, and the mounted
+projects workspace remain on the host across updates.
+
+```bash
+cp .env.example .env
+docker compose pull
+docker compose up -d
+./scripts/check-latest-release.sh
+```
+
+The LAN route is `http://codex-loop.home`; release metadata is available at
+`http://codex-loop.home/api/version`. Caddy, DNS, and landing-page configuration
+live in the sibling `home-server-setup` repository.
+
+The default deployment mounts `/Users/mauri-home/.codex` and
+`/Users/mauri-home/Documents/projects`. Adjust `.env` on a different host. This
+is a powerful control surface that can launch Codex against the mounted
+workspace, so keep it on a trusted LAN and do not expose it to the public
+internet without authentication and TLS.
+
 ## Documentation
 
 - [Attention and intervention](docs/attention-and-intervention.md) documents native user-input handling, proactive guardrails, operator semantics, security invariants, and the prioritized follow-up backlog.

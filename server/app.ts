@@ -81,6 +81,14 @@ export function createApp(store = new JsonWorkflowStore(), bridge: CodexBridgeSe
     response.json({ status: "ok" });
   });
 
+  app.get("/api/version", (_request, response) => {
+    response.json({
+      version: process.env.CODEX_LOOP_VERSION ?? "development",
+      revision: process.env.CODEX_LOOP_REVISION ?? "unknown",
+      builtAt: process.env.CODEX_LOOP_BUILT_AT ?? "unknown",
+    });
+  });
+
   app.get("/api/bridge/status", (_request, response) => {
     response.json(bridge.status());
   });

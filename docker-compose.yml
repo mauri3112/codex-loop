@@ -1,0 +1,44 @@
+name: codex-loop
+
+services:
+  codex-loop:
+    image: ghcr.io/mauri3112/codex-loop:latest
+    container_name: codex-loop
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 4317
+      CODEX_HOME: /root/.codex
+      CODEX_LOOP_WORKSPACE: /workspace
+      CODEX_LOOP_SANDBOX: ${CODEX_LOOP_SANDBOX:-workspace-write}
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      - ./data:/app/data
+      - ${CODEX_HOME_PATH:-/Users/mauri-home/.codex}:/root/.codex
+      - ${CODEX_LOOP_WORKSPACE_PATH:-/Users/mauri-home/Documents/projects}:/workspace
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+    networks:
+      - proxy
+
+  updater:
+    image: containrrr/watchtower:1.7.1
+    container_name: codex-loop-updater
+    restart: unless-stopped
+    environment:
+      DOCKER_API_VERSION: "1.44"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_POLL_INTERVAL: ${UPDATE_INTERVAL_SECONDS:-300}
+      WATCHTOWER_ROLLING_RESTART: "true"
+      TZ: ${TZ:-Europe/Berlin}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - proxy
+
+networks:
+  proxy:
+    external: true
+    name: home-server-proxy
+
