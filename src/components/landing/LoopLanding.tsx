@@ -124,8 +124,8 @@ export function LoopLanding({
               <GitBranch size={21} strokeWidth={1.7} />
             </div>
             <div>
-              <h2 id="loop-intro-heading">Coordinate work across Codex threads</h2>
-              <p>Coordinate multiple Codex threads in a single workflow. Assign tasks, share context, supervise execution, and inspect every result.</p>
+              <h2 id="loop-intro-heading">Describe the outcome. Codex designs the Loop.</h2>
+              <p>Start with as much detail as you have. The Loop Designer will infer the agents, dependencies, verification, permissions, and limits, then ask only for consequential missing information.</p>
             </div>
           </section>
 
@@ -139,9 +139,9 @@ export function LoopLanding({
               rows={3}
             />
             <div className="loop-landing__composer-footer">
-              <span><Sparkles size={13} aria-hidden="true" />Codex will propose agents, handoffs, and supervision.</span>
+              <span><Sparkles size={13} aria-hidden="true" />Continue in chat and edit the generated graph only when you want to.</span>
               <Button type="submit" variant="primary" disabled={!canGenerate} loading={generating}>
-                Generate workflow<ArrowRight size={14} aria-hidden="true" />
+                Start designing<ArrowRight size={14} aria-hidden="true" />
               </Button>
             </div>
           </form>

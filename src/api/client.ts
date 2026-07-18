@@ -1,4 +1,4 @@
-import type { AppData, Workflow, WorkflowRunConfiguration } from "../domain/types";
+import type { AppData, Workflow, WorkflowDefinition, WorkflowRunConfiguration, WorkflowValidationIssue } from "../domain/types";
 import type { TaskCapabilitiesResponse } from "../domain/task-capabilities";
 
 export interface CreateInterventionInput {
@@ -45,6 +45,10 @@ export const api = {
   create: () => request<Workflow>("/api/workflows", { method: "POST", body: JSON.stringify({}) }),
   update: (workflow: Workflow) => request<Workflow>(`/api/workflows/${workflow.id}`, { method: "PUT", body: JSON.stringify(workflow) }),
   save: (id: string) => request<Workflow>(`/api/workflows/${id}/save`, { method: "POST" }),
+  validate: (id: string) => request<{ revision: number; issues: WorkflowValidationIssue[] }>(`/api/workflows/${id}/validate`, { method: "POST", body: JSON.stringify({}) }),
+  mutate: (id: string, input: { baseRevision: number; actor: "user" | "designer" | "system" | "mcp"; rationale: string; definition: WorkflowDefinition }) => request<Workflow>(`/api/workflows/${id}/mutations`, { method: "POST", body: JSON.stringify(input) }),
+  undo: (id: string, mutationId?: string) => request<Workflow>(`/api/workflows/${id}/undo`, { method: "POST", body: JSON.stringify({ mutationId }) }),
+  sendDesignerMessage: (id: string, message: string) => request<Workflow>(`/api/workflows/${id}/designer/messages`, { method: "POST", body: JSON.stringify({ message }) }),
   bridgeStatus: () => request<BridgeStatus>("/api/bridge/status"),
   connectBridge: () => request<BridgeStatus>("/api/bridge/connect", { method: "POST", body: JSON.stringify({}) }),
   taskCapabilities: () => request<TaskCapabilitiesResponse>("/api/task-capabilities"),
@@ -55,4 +59,5 @@ export const api = {
   resolveApproval: (workflowId: string, threadId: string, decision: "accept" | "decline") => request<Workflow>(`/api/workflows/${workflowId}/threads/${threadId}/approval`, { method: "POST", body: JSON.stringify({ decision }) }),
   createIntervention: (workflowId: string, input: CreateInterventionInput) => request<Workflow>(`/api/workflows/${workflowId}/interventions`, { method: "POST", body: JSON.stringify(input) }),
   respondToAttention: (workflowId: string, attentionId: string, input: RespondToAttentionInput) => request<Workflow>(`/api/workflows/${workflowId}/attention/${attentionId}/respond`, { method: "POST", body: JSON.stringify(input) }),
+  resolveGate: (workflowId: string, nodeId: string, decision: "approve" | "decline") => request<Workflow>(`/api/workflows/${workflowId}/gates/${nodeId}`, { method: "POST", body: JSON.stringify({ decision }) }),
 };

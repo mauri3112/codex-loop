@@ -8,6 +8,7 @@ interface RunControlProps {
   configuration: WorkflowRunConfiguration;
   onStart: () => Promise<void>;
   onSave: (configuration: WorkflowRunConfiguration) => Promise<void>;
+  disabled?: boolean;
 }
 
 const DAYS = [
@@ -34,7 +35,7 @@ function newParameter(): WebhookParameter {
   return { id: globalThis.crypto.randomUUID(), key: "", defaultValue: "" };
 }
 
-export function RunControl({ configuration, onStart, onSave }: RunControlProps) {
+export function RunControl({ configuration, onStart, onSave, disabled = false }: RunControlProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [dialog, setDialog] = useState<"scheduled" | "webhook" | null>(null);
@@ -85,6 +86,7 @@ export function RunControl({ configuration, onStart, onSave }: RunControlProps) 
   };
 
   const primaryAction = () => {
+    if (disabled) return;
     if (configuration.mode === "single") void selectSingle();
     else openDialog(configuration.mode);
   };
@@ -114,7 +116,7 @@ export function RunControl({ configuration, onStart, onSave }: RunControlProps) 
     <>
       <div className="run-control" ref={rootRef}>
         <div className="run-control__split">
-          <button className="run-control__primary" onClick={primaryAction} disabled={pending} data-testid="run-primary">
+          <button className="run-control__primary" onClick={primaryAction} disabled={pending || disabled} title={disabled ? "Publish this Loop revision before running" : undefined} data-testid="run-primary">
             <Zap size={13} fill="currentColor" />
             <span>{pending ? "Working…" : MODE_LABELS[configuration.mode]}</span>
           </button>
@@ -124,7 +126,7 @@ export function RunControl({ configuration, onStart, onSave }: RunControlProps) 
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             onClick={() => setMenuOpen((open) => !open)}
-            disabled={pending}
+            disabled={pending || disabled}
             data-testid="run-selector"
           >
             <ChevronDown size={13} />

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Design Loop"
+  short_description: "Create and refine Codex Loops conversationally."
+  default_prompt: "Use $design-loop to create or update a verified Codex Loop for this task."

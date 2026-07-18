@@ -81,7 +81,7 @@ export class CodexAppServerClient {
     const args = this.options.args ?? ["app-server", "--listen", "stdio://"];
     const child = spawn(command, args, {
       cwd: process.cwd(),
-      env: { ...process.env, ...this.options.env },
+      env: appServerEnvironment(this.options.env),
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.process = child;
@@ -224,6 +224,17 @@ export class CodexAppServerClient {
       this.closing = false;
     }
   }
+}
+
+function appServerEnvironment(overrides: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+  const exact = new Set([
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "TERM",
+    "CODEX_HOME", "CODEX_BINARY", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_ORG_ID",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+  ]);
+  const filtered = Object.fromEntries(Object.entries(process.env).filter(([key]) => exact.has(key)));
+  return { ...filtered, ...overrides };
 }
 
 export function textInput(text: string) {

@@ -17,7 +17,11 @@
 .workspace-controls > button.intervene-control i { min-width: 15px; height: 15px; display: grid; place-items: center; border-radius: 8px; color: #24252d; background: var(--amber); font-size: 8px; font-style: normal; font-weight: 750; }
 .workspace-controls > button.run-primary { background: #171922; color: #fff; padding: 0 11px; }
 .workspace-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.workspace-content > .loop-workspace-canvas { flex: 1; min-height: 0; }
+.workspace-content.is-designer { display: grid; grid-template-columns: minmax(310px, 38%) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+.workspace-designer-pane, .workspace-canvas-pane { min-width: 0; min-height: 0; }
+.workspace-designer-pane > .loop-designer, .workspace-canvas-pane > .loop-workspace-canvas { height: 100%; }
+.workspace-content.is-visual-edit > .workspace-canvas-pane { flex: 1; min-height: 0; }
+.workspace-mobile-tabs { display: none; }
 .static-screen { height: 100%; background: var(--surface); display: flex; flex-direction: column; }
 .static-screen > header { height: 49px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 18px; }
 .static-screen h1 { font-size: 13px; margin: 0; font-weight: 570; }
@@ -35,4 +39,12 @@
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 1050px) { .workspace-progress { display: none; } .workspace-identity strong { max-width: 135px; } }
 @media (max-width: 780px) { .workspace-header { padding-left: 48px; } .workspace-back { font-size: 0; padding: 0 5px; } .workspace-back svg { width: 17px; height: 17px; } .workspace-identity { border: 0; padding: 0; min-width: 0; flex: 1; } .workspace-identity strong { max-width: 160px; } .workspace-controls > button span, .workspace-controls > .ui-button:not(:last-child) { display: none; } .workspace-controls > button { width: 30px; padding: 0; justify-content: center; } .workspace-controls > button.run-primary { width: auto; padding: 0 9px; } }
+@media (max-width: 800px) {
+  .workspace-content.is-designer { display: grid; grid-template-columns: 1fr; grid-template-rows: 34px minmax(0, 1fr); }
+  .workspace-mobile-tabs { display: grid; grid-template-columns: 1fr 1fr; padding: 4px; background: var(--surface-subtle); border-bottom: 1px solid var(--border); }
+  .workspace-mobile-tabs button { height: 25px; color: var(--muted); background: transparent; border: 0; border-radius: 5px; font-size: 10px; }
+  .workspace-mobile-tabs button[aria-selected="true"] { color: var(--text); background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  .workspace-content.is-designer .workspace-designer-pane, .workspace-content.is-designer .workspace-canvas-pane { display: none; grid-row: 2; }
+  .workspace-content.is-designer .is-mobile-active { display: block; }
+}
 @media (max-width: 520px) { .workspace-identity .workflow-state { display: none; } .workspace-controls > button:not(.run-primary):not(.intervene-control):not(:last-child) { display: none; } }

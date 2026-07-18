@@ -37,7 +37,7 @@ function zonedMinute(date: Date, timezone: string): ZonedMinute | undefined {
 
 export function isScheduleDue(workflow: Workflow, now = new Date()): boolean {
   const configuration = workflow.runConfiguration;
-  if (configuration.mode !== "scheduled" || ["running", "paused"].includes(workflow.status)) return false;
+  if (workflow.lifecycle !== "published" || configuration.mode !== "scheduled" || ["running", "paused"].includes(workflow.status)) return false;
   const current = zonedMinute(now, configuration.schedule.timezone);
   if (!current || !configuration.schedule.days.includes(current.weekday) || !configuration.schedule.times.includes(current.time)) return false;
   return !workflow.runs.some((run) => {

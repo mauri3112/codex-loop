@@ -63,6 +63,7 @@ export interface LoopWorkspaceCanvasProps {
   onWorkflowChange: (workflow: Workflow) => void;
   onOpenThread?: (threadId: string) => void;
   className?: string;
+  readOnly?: boolean;
 }
 
 interface DrawStart {
@@ -121,6 +122,7 @@ function defaultAgent(position: { x: number; y: number }): { agent: AgentNode; t
     progress: 0,
     position,
     size: COMPACT_AGENT_SIZE,
+    kind: "agent",
   };
   return {
     agent,
@@ -148,6 +150,7 @@ function LoopWorkspaceCanvasInner({
   onWorkflowChange,
   onOpenThread,
   className,
+  readOnly = false,
 }: LoopWorkspaceCanvasProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const drawStartRef = useRef<DrawStart | null>(null);
@@ -161,8 +164,9 @@ function LoopWorkspaceCanvasInner({
   const { screenToFlowPosition, zoomIn, zoomOut, fitView } = useReactFlow<LoopFlowNode, LoopFlowEdge>();
 
   const emit = useCallback((next: Workflow) => {
+    if (readOnly) return;
     onWorkflowChange({ ...next, updatedAt: new Date().toISOString() });
-  }, [onWorkflowChange]);
+  }, [onWorkflowChange, readOnly]);
 
   const requestDeleteAgent = useCallback((nodeId: string) => {
     setPendingDeleteNodeId(nodeId);
@@ -221,13 +225,13 @@ function LoopWorkspaceCanvasInner({
         agent,
         order: index + 1,
         onOpenThread,
-        onRequestDelete: requestDeleteAgent,
+        onRequestDelete: readOnly ? undefined : requestDeleteAgent,
       },
       selected: selection?.type === "agent" && selection.id === agent.id,
       zIndex: 2,
       ariaLabel: `Agent ${agent.name}, ${agent.status}`,
     })),
-  ], [onOpenThread, requestDeleteAgent, selection, workflow.nodes, workflow.observers]);
+  ], [onOpenThread, readOnly, requestDeleteAgent, selection, workflow.nodes, workflow.observers]);
 
   const mappedEdges = useMemo<LoopFlowEdge[]>(() => workflow.edges.map((edge) => ({
     id: flowId.edge(edge.id),
@@ -246,6 +250,24 @@ function LoopWorkspaceCanvasInner({
 
   useEffect(() => setNodes(mappedNodes), [mappedNodes, setNodes]);
   useEffect(() => setEdges(mappedEdges), [mappedEdges, setEdges]);
+
+  useEffect(() => {
+    const host = canvasRef.current;
+    if (!readOnly || !host || nodes.length === 0) return;
+    let frame: number | undefined;
+    const fitVisiblePreview = () => {
+      if (host.clientWidth === 0 || host.clientHeight === 0) return;
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => { void fitView({ padding: 0.18, duration: 0 }); });
+    };
+    const observer = new ResizeObserver(fitVisiblePreview);
+    observer.observe(host);
+    fitVisiblePreview();
+    return () => {
+      observer.disconnect();
+      if (frame !== undefined) cancelAnimationFrame(frame);
+    };
+  }, [fitView, nodes.length, readOnly, workflow.id]);
 
   const onNodesChange = useCallback((changes: NodeChange<LoopFlowNode>[]) => {
     setNodes((current) => applyNodeChanges(changes, current));
@@ -305,9 +327,9 @@ function LoopWorkspaceCanvasInner({
   }, [emit, workflow]);
 
   const handleRootDoubleClick = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
-    if (observerDrawMode || !(event.target instanceof Element) || !event.target.classList.contains("react-flow__pane")) return;
+    if (readOnly || observerDrawMode || !(event.target instanceof Element) || !event.target.classList.contains("react-flow__pane")) return;
     addAgent(screenToFlowPosition({ x: event.clientX, y: event.clientY }));
-  }, [addAgent, observerDrawMode, screenToFlowPosition]);
+  }, [addAgent, observerDrawMode, readOnly, screenToFlowPosition]);
 
   const beginObserverDraw = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -368,7 +390,7 @@ function LoopWorkspaceCanvasInner({
   const activeSelection = selection ?? { type: "workflow" as const, id: workflow.id };
 
   return (
-    <section className={`loop-workspace-canvas${mobileInspectorOpen ? " is-inspector-open" : ""}${className ? ` ${className}` : ""}`}>
+    <section className={`loop-workspace-canvas${readOnly ? " is-readonly" : ""}${mobileInspectorOpen ? " is-inspector-open" : ""}${className ? ` ${className}` : ""}`}>
       <div className="loop-canvas-stage" ref={canvasRef} onDoubleClick={handleRootDoubleClick}>
         <ReactFlow<LoopFlowNode, LoopFlowEdge>
           nodes={nodes}
@@ -377,21 +399,21 @@ function LoopWorkspaceCanvasInner({
           edgeTypes={edgeTypes}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          onNodeDragStop={handleNodeDragStop}
+          onConnect={readOnly ? undefined : onConnect}
+          onNodeDragStop={readOnly ? undefined : handleNodeDragStop}
           onNodeClick={(_event, node) => {
             const parsed = parseFlowId(node.id);
-            if (parsed) { onSelectionChange({ type: parsed.kind, id: parsed.id }); setMobileInspectorOpen(true); }
+            if (parsed) { onSelectionChange({ type: parsed.kind, id: parsed.id }); if (!readOnly) setMobileInspectorOpen(true); }
           }}
           onEdgeClick={(_event, edge) => {
             const parsed = parseFlowId(edge.id);
-            if (parsed?.kind === "edge") { onSelectionChange({ type: "edge", id: parsed.id }); setMobileInspectorOpen(true); }
+            if (parsed?.kind === "edge") { onSelectionChange({ type: "edge", id: parsed.id }); if (!readOnly) setMobileInspectorOpen(true); }
           }}
           onPaneClick={() => { onSelectionChange({ type: "workflow", id: workflow.id }); setMobileInspectorOpen(false); }}
           onMoveEnd={(_event, viewport) => {
             const previous = workflow.viewport;
             if (Math.abs(previous.x - viewport.x) < 0.5 && Math.abs(previous.y - viewport.y) < 0.5 && Math.abs(previous.zoom - viewport.zoom) < 0.001) return;
-            emit({ ...workflow, viewport });
+            if (!readOnly) emit({ ...workflow, viewport });
           }}
           defaultViewport={workflow.viewport}
           minZoom={0.35}
@@ -404,8 +426,8 @@ function LoopWorkspaceCanvasInner({
           zoomOnPinch
           zoomOnDoubleClick={false}
           selectionOnDrag={false}
-          nodesDraggable={!observerDrawMode}
-          nodesConnectable={!observerDrawMode}
+          nodesDraggable={!readOnly && !observerDrawMode}
+          nodesConnectable={!readOnly && !observerDrawMode}
           elementsSelectable={!observerDrawMode}
           deleteKeyCode={null}
           elevateNodesOnSelect={false}
@@ -429,13 +451,13 @@ function LoopWorkspaceCanvasInner({
         ) : null}
 
         <div className="loop-canvas-toolbar" role="toolbar" aria-label="Canvas controls">
-          <button type="button" onClick={() => addAgent(screenToFlowPosition({
+          {!readOnly ? <button type="button" onClick={() => addAgent(screenToFlowPosition({
             x: (canvasRef.current?.getBoundingClientRect().left ?? 0) + (canvasRef.current?.clientWidth ?? 600) / 2,
             y: (canvasRef.current?.getBoundingClientRect().top ?? 0) + (canvasRef.current?.clientHeight ?? 400) / 2,
           }))} title="Add agent">
             <Bot size={15} aria-hidden="true" /><span>Add agent</span>
-          </button>
-          <button
+          </button> : null}
+          {!readOnly ? <button
             type="button"
             onClick={() => {
               const supervisor = workflow.observers[0];
@@ -444,20 +466,20 @@ function LoopWorkspaceCanvasInner({
             title="Open loop supervisor"
           >
             <Eye size={15} aria-hidden="true" /><span>Supervisor</span>
-          </button>
-          <button type="button" aria-expanded={connectOpen} onClick={() => setConnectOpen((open) => !open)} title="Connect agents">
+          </button> : null}
+          {!readOnly ? <button type="button" aria-expanded={connectOpen} onClick={() => setConnectOpen((open) => !open)} title="Connect agents">
             <Link2 size={15} aria-hidden="true" /><span>Connect</span>
-          </button>
-          <button type="button" onClick={() => { onSelectionChange({ type: "workflow", id: workflow.id }); setMobileInspectorOpen(true); }} title="Workflow settings">
+          </button> : null}
+          {!readOnly ? <button type="button" onClick={() => { onSelectionChange({ type: "workflow", id: workflow.id }); setMobileInspectorOpen(true); }} title="Workflow settings">
             <Settings2 size={15} aria-hidden="true" /><span>Settings</span>
-          </button>
-          <span className="loop-toolbar-divider" />
+          </button> : null}
+          {!readOnly ? <span className="loop-toolbar-divider" /> : null}
           <button type="button" aria-label="Zoom out" title="Zoom out" onClick={() => void zoomOut({ duration: 140 })}><Minus size={15} /></button>
           <button type="button" aria-label="Zoom in" title="Zoom in" onClick={() => void zoomIn({ duration: 140 })}><Plus size={15} /></button>
           <button type="button" aria-label="Fit workflow" title="Fit workflow" onClick={() => void fitView({ padding: 0.18, duration: 180 })}><Maximize2 size={14} /></button>
         </div>
 
-        {connectOpen ? (
+        {!readOnly && connectOpen ? (
           <form className="loop-connect-popover" onSubmit={(event) => { event.preventDefault(); connectNodes(connectSource, connectTarget); }}>
             <strong>Connect agents</strong>
             <label>Source<select aria-label="Connection source" value={connectSource} onChange={(event) => setConnectSource(event.target.value)}>{workflow.nodes.map((node) => <option value={node.id} key={node.id}>{node.name}</option>)}</select></label>
@@ -469,18 +491,18 @@ function LoopWorkspaceCanvasInner({
         {workflow.nodes.length === 0 ? (
           <div className="loop-canvas-empty" aria-hidden="true">
             <Plus size={16} />
-            <span>Double-click to add an Agent</span>
+            <span>{readOnly ? "Describe this Loop in chat to create the graph" : "Double-click to add an Agent"}</span>
           </div>
         ) : null}
       </div>
-      <SelectionInspector
+      {!readOnly ? <SelectionInspector
         workflow={workflow}
         selection={activeSelection}
         onWorkflowChange={emit}
         onSelectionChange={onSelectionChange}
         onRequestDeleteAgent={requestDeleteAgent}
-      />
-      <button className="loop-mobile-inspector-close" type="button" aria-label="Close inspector" onClick={() => setMobileInspectorOpen(false)}><X size={15} /></button>
+      /> : null}
+      {!readOnly ? <button className="loop-mobile-inspector-close" type="button" aria-label="Close inspector" onClick={() => setMobileInspectorOpen(false)}><X size={15} /></button> : null}
       {pendingDeleteAgent ? (
         <div className="loop-delete-dialog-backdrop" role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget) setPendingDeleteNodeId(null);

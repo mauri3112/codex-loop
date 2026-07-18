@@ -14,6 +14,7 @@ const STATUS_LABELS: Record<IndicatorStatus, string> = {
   failed: "Failed",
   retrying: "Retrying",
   completed: "Completed",
+  skipped: "Skipped",
   stopped: "Stopped",
   paused: "Paused",
 };

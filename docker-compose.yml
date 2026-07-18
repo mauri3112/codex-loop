@@ -11,6 +11,9 @@ services:
       CODEX_HOME: /root/.codex
       CODEX_LOOP_WORKSPACE: /workspace
       CODEX_LOOP_SANDBOX: ${CODEX_LOOP_SANDBOX:-workspace-write}
+      CODEX_LOOP_DESIGNER_MODEL: ${CODEX_LOOP_DESIGNER_MODEL:-gpt-5.6-sol}
+      CODEX_LOOP_PUBLIC_URL: ${CODEX_LOOP_PUBLIC_URL:-http://codex-loop.home}
+      CODEX_LOOP_MCP_TOKEN: ${CODEX_LOOP_MCP_TOKEN:-}
       TZ: ${TZ:-Europe/Berlin}
     volumes:
       - ./data:/app/data
@@ -41,4 +44,3 @@ networks:
   proxy:
     external: true
     name: home-server-proxy
-

@@ -20,7 +20,7 @@ describe("webhook workflow runs", () => {
   beforeEach(async () => {
     directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-trigger-"));
     store = new JsonWorkflowStore(path.join(directory, "data.json"));
-    const workflow = createGeneratedWorkflow("Run from a webhook", { id: "webhook-loop" });
+    const workflow = createGeneratedWorkflow("Run from a webhook", { id: "webhook-loop", saved: true });
     workflow.runConfiguration = {
       ...workflow.runConfiguration,
       mode: "webhook",

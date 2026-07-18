@@ -1,8 +1,10 @@
-export type AgentStatus = "idle" | "queued" | "running" | "waiting" | "blocked" | "failed" | "retrying" | "completed" | "stopped";
+export type AgentStatus = "idle" | "queued" | "running" | "waiting" | "blocked" | "failed" | "retrying" | "completed" | "skipped" | "stopped";
 export type AgentRole = "investigator" | "implementer" | "tester" | "reviewer" | "custom";
 export type AgentModel = "Sol" | "Terra" | "Luna";
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type WorkflowStatus = "draft" | "ready" | "running" | "paused" | "stopped" | "completed" | "failed";
+export type WorkflowLifecycle = "draft" | "published";
+export type WorkflowStepKind = "agent" | "map" | "join" | "condition" | "loop" | "verify" | "gate" | "subworkflow";
 export type Selection = { type: "workflow" | "agent" | "edge" | "observer" | "context"; id: string };
 export type Point = { x: number; y: number };
 export type Rect = Point & { width: number; height: number };
@@ -25,6 +27,15 @@ export interface AgentNode {
   progress: number;
   position: Point;
   size: { width: number; height: number };
+  kind: WorkflowStepKind;
+  orchestration?: {
+    collectionExpression?: string;
+    conditionExpression?: string;
+    stopCondition?: string;
+    maximumIterations?: number;
+    subworkflowId?: string;
+    verificationRubric?: string;
+  };
 }
 
 export interface WorkflowEdge {
@@ -36,7 +47,7 @@ export interface WorkflowEdge {
   retries: number;
   failureBehavior: "block-target" | "continue-with-warning" | "ask-user";
   approvalRequired: boolean;
-  status: "idle" | "active" | "waiting-approval" | "satisfied" | "failed";
+  status: "idle" | "active" | "waiting-approval" | "satisfied" | "skipped" | "failed";
 }
 
 export interface ObserverRegion {
@@ -94,7 +105,7 @@ export interface PendingApproval {
   reason?: string;
 }
 
-export type AttentionKind = "user-input" | "suspected-stall" | "deadlock" | "retry-exhausted" | "observer-escalation";
+export type AttentionKind = "user-input" | "approval-gate" | "suspected-stall" | "deadlock" | "retry-exhausted" | "observer-escalation";
 export interface AttentionQuestion {
   id: string;
   header: string;
@@ -171,6 +182,24 @@ export interface WorkflowRun {
   input?: Record<string, string | number | boolean | null>;
   startedAt?: string;
   completedAt?: string;
+  workflowRevision?: number;
+  consumedAgents?: number;
+  consumedIterations?: number;
+  consumedTokens?: number;
+  noProgressRounds?: number;
+  lastProgressFingerprint?: string;
+  checkpoints?: WorkflowCheckpoint[];
+  repositoryRevision?: string;
+  parentRun?: { workflowId: string; nodeId: string };
+}
+
+export interface WorkflowCheckpoint {
+  id: string;
+  nodeId: string;
+  cacheKey: string;
+  status: "completed" | "failed";
+  outputSummary?: string;
+  createdAt: string;
 }
 
 export interface RunScheduleConfiguration {
@@ -196,22 +225,120 @@ export interface WorkflowRunConfiguration {
   webhook: WebhookRunConfiguration;
 }
 
-export interface EnvironmentVariable {
+export interface WorkflowConfigurationValue {
   id: string;
   key: string;
   value: string;
 }
 
-export interface Workflow {
+/** @deprecated Migrated to configurationValues or secretRequirements during normalization. */
+export type EnvironmentVariable = WorkflowConfigurationValue;
+
+export type CapabilityKind = "app" | "mcp" | "cli" | "computer-use" | "skill" | "shell";
+export interface CapabilityBinding {
   id: string;
+  kind: CapabilityKind;
+  name: string;
+  status: "available" | "setup-required" | "disabled";
+  authStatus?: "unsupported" | "notLoggedIn" | "bearerToken" | "oAuth" | "verified" | "unknown";
+  provider?: string;
+  requiredByNodeIds: string[];
+}
+
+export interface SecretRequirement {
+  id: string;
+  key: string;
+  description: string;
+  status: "required" | "bound";
+  source?: "process-env" | "connector" | "keychain";
+  sourceRef?: string;
+  requiredByNodeIds: string[];
+}
+
+export interface WorkflowBudgets {
+  maximumConcurrentAgents: number;
+  maximumTotalAgents: number;
+  maximumIterations: number;
+  maximumWallClockMinutes: number;
+  maximumTokens?: number;
+  maximumNoProgressRounds: number;
+}
+
+export interface DesignerMessage extends ThreadMessage {
+  status?: "complete" | "streaming" | "failed";
+  mutationId?: string;
+}
+
+export interface DesignerState {
+  threadId?: string;
+  modelRole: "planner";
+  configuredModel: string;
+  effectiveModel?: string;
+  state: "disconnected" | "starting" | "running" | "idle" | "waiting-input" | "failed";
+  messages: DesignerMessage[];
+  assumptions: string[];
+  pendingQuestions: string[];
+  lastError?: string;
+}
+
+export interface WorkflowDefinition {
   name: string;
   mainTask: string;
   defaultModel: AgentModel;
   executionMode: "automatic" | "approval-gated";
   sharedConnectors: string[];
-  environmentVariables: EnvironmentVariable[];
+  configurationValues: WorkflowConfigurationValue[];
+  capabilityBindings: CapabilityBinding[];
+  secretRequirements: SecretRequirement[];
   approvalPolicy: "never" | "on-risk" | "every-handoff";
   maximumRetries: number;
+  executionBackend?: "codex" | "simulation";
+  runConfiguration: WorkflowRunConfiguration;
+  budgets: WorkflowBudgets;
+  nodes: AgentNode[];
+  edges: WorkflowEdge[];
+  observers: ObserverRegion[];
+  contextBlocks: ContextBlock[];
+  viewport: { x: number; y: number; zoom: number };
+}
+
+export interface WorkflowMutation {
+  id: string;
+  baseRevision: number;
+  revision: number;
+  actor: "user" | "designer" | "system" | "mcp";
+  rationale: string;
+  before: WorkflowDefinition;
+  after: WorkflowDefinition;
+  createdAt: string;
+  undoneMutationId?: string;
+}
+
+export interface WorkflowValidationIssue {
+  id: string;
+  severity: "error" | "warning";
+  code: string;
+  message: string;
+  nodeId?: string;
+  edgeId?: string;
+}
+
+export interface Workflow {
+  schemaVersion: 2;
+  id: string;
+  revision: number;
+  lifecycle: WorkflowLifecycle;
+  name: string;
+  mainTask: string;
+  defaultModel: AgentModel;
+  executionMode: "automatic" | "approval-gated";
+  sharedConnectors: string[];
+  configurationValues: WorkflowConfigurationValue[];
+  capabilityBindings: CapabilityBinding[];
+  secretRequirements: SecretRequirement[];
+  approvalPolicy: "never" | "on-risk" | "every-handoff";
+  maximumRetries: number;
+  budgets: WorkflowBudgets;
   executionBackend?: "codex" | "simulation";
   runConfiguration: WorkflowRunConfiguration;
   status: WorkflowStatus;
@@ -225,6 +352,9 @@ export interface Workflow {
   events: AuditEvent[];
   attentionRequests: AttentionRequest[];
   interventions: InterventionRecord[];
+  designer: DesignerState;
+  mutations: WorkflowMutation[];
+  validationIssues: WorkflowValidationIssue[];
   viewport: { x: number; y: number; zoom: number };
   createdAt: string;
   updatedAt: string;

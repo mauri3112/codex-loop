@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AppData, Workflow } from "../src/domain/types.js";
+import { workflowDefinition } from "../src/domain/definition.js";
 import { createApp } from "./app.js";
 import { JsonWorkflowStore } from "./store.js";
 
@@ -75,7 +76,7 @@ describe("Codex Loop API and persistence", () => {
     expect(reopened.body).toEqual(generated.body);
   });
 
-  it("creates, updates, saves, and reloads a workflow from disk", async () => {
+  it("creates and versions drafts, blocks invalid publication, and persists valid published workflows", async () => {
     const created = await json<Workflow>("/api/workflows", { method: "POST", body: "{}" });
     expect(created.response.status).toBe(201);
     expect(created.body.status).toBe("draft");
@@ -86,17 +87,91 @@ describe("Codex Loop API and persistence", () => {
       body: JSON.stringify(updatedPayload),
     });
     expect(updated.body.name).toBe("Persisted workflow");
+    expect(updated.body.revision).toBe(1);
 
-    const saved = await json<Workflow>(`/api/workflows/${created.body.id}/save`, { method: "POST" });
+    const invalidSave = await json<{ error: string }>(`/api/workflows/${created.body.id}/save`, { method: "POST" });
+    expect(invalidSave.response.status).toBe(422);
+
+    const generated = await json<Workflow>("/api/workflows/generate", { method: "POST", body: JSON.stringify({ task: "Persist this valid workflow" }) });
+    const saved = await json<Workflow>(`/api/workflows/${generated.body.id}/save`, { method: "POST" });
     expect(saved.body.saved).toBe(true);
+    expect(saved.body.lifecycle).toBe("published");
 
     const reloadedStore = new JsonWorkflowStore(filePath);
-    const reloaded = await reloadedStore.getWorkflow(created.body.id);
-    expect(reloaded.name).toBe("Persisted workflow");
+    const reloaded = await reloadedStore.getWorkflow(generated.body.id);
     expect(reloaded.saved).toBe(true);
 
     const raw = JSON.parse(await readFile(filePath, "utf8")) as AppData;
-    expect(raw.workflows.some((workflow) => workflow.id === created.body.id)).toBe(true);
+    expect(raw.workflows.some((workflow) => workflow.id === generated.body.id)).toBe(true);
+  });
+
+  it("applies optimistic definition mutations and records undo as a new revision", async () => {
+    const created = await json<Workflow>("/api/workflows/generate", { method: "POST", body: JSON.stringify({ task: "Version this Loop" }) });
+    const definition = workflowDefinition(created.body);
+    definition.name = "Versioned by Designer";
+    const mutated = await json<Workflow>(`/api/workflows/${created.body.id}/mutations`, {
+      method: "POST",
+      body: JSON.stringify({ baseRevision: 0, actor: "designer", rationale: "Name the generated Loop", definition }),
+    });
+    expect(mutated.response.status).toBe(201);
+    expect(mutated.body.revision).toBe(1);
+    expect(mutated.body.name).toBe("Versioned by Designer");
+    expect(mutated.body.mutations.at(-1)?.actor).toBe("designer");
+
+    const conflict = await json<{ error: string }>(`/api/workflows/${created.body.id}/mutations`, {
+      method: "POST",
+      body: JSON.stringify({ baseRevision: 0, actor: "mcp", rationale: "Apply a stale patch", definition }),
+    });
+    expect(conflict.response.status).toBe(409);
+    expect(conflict.body.error).toContain("current revision is 1");
+
+    const undone = await json<Workflow>(`/api/workflows/${created.body.id}/undo`, { method: "POST", body: "{}" });
+    expect(undone.body.revision).toBe(2);
+    expect(undone.body.name).toBe(created.body.name);
+    expect(undone.body.mutations.at(-1)?.undoneMutationId).toBe(mutated.body.mutations.at(-1)?.id);
+  });
+
+  it("serves authenticated MCP discovery and draft creation over JSON-RPC", async () => {
+    const previousToken = process.env.CODEX_LOOP_MCP_TOKEN;
+    process.env.CODEX_LOOP_MCP_TOKEN = "test-mcp-token";
+    try {
+      const unauthorized = await json<{ error: string }>("/mcp", {
+        method: "POST",
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
+      });
+      expect(unauthorized.response.status).toBe(401);
+
+      const headers = { Authorization: "Bearer test-mcp-token" };
+      const initialized = await json<{ result: { serverInfo: { name: string }; capabilities: { tools: object } } }>("/mcp", {
+        method: "POST", headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "initialize", params: {} }),
+      });
+      expect(initialized.body.result.serverInfo.name).toBe("codex-loop");
+      expect(initialized.body.result.capabilities.tools).toBeDefined();
+
+      const listed = await json<{ result: { tools: Array<{ name: string }> } }>("/mcp", {
+        method: "POST", headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/list", params: {} }),
+      });
+      expect(listed.body.result.tools.map((tool) => tool.name)).toContain("loop_designer_message");
+      expect(listed.body.result.tools.map((tool) => tool.name)).toContain("loop_gate_decision");
+
+      const draft = await json<{ result: { structuredContent: { workflow: Workflow; deepLink: string } } }>("/mcp", {
+        method: "POST", headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "loop_create_draft", arguments: { name: "From Codex", objective: "Create a test Loop" } } }),
+      });
+      expect(draft.body.result.structuredContent.workflow.name).toBe("From Codex");
+      expect(draft.body.result.structuredContent.deepLink).toContain(`/loop/${draft.body.result.structuredContent.workflow.id}`);
+
+      const unknown = await json<{ error: { code: number } }>("/mcp", {
+        method: "POST", headers,
+        body: JSON.stringify({ jsonrpc: "2.0", id: 5, method: "not/a/method", params: {} }),
+      });
+      expect(unknown.body.error.code).toBe(-32601);
+    } finally {
+      if (previousToken === undefined) delete process.env.CODEX_LOOP_MCP_TOKEN;
+      else process.env.CODEX_LOOP_MCP_TOKEN = previousToken;
+    }
   });
 
   it("preserves live Codex runtime state when a stale canvas edit is persisted", async () => {

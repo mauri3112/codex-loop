@@ -1,5 +1,6 @@
 import { normalizeAgentModel, normalizeReasoningEffort } from "./models";
-import type { AgentNode, EnvironmentVariable, ObserverRegion, Rect, Workflow, WorkflowRunConfiguration } from "./types";
+import { validateWorkflowDefinition, workflowDefinition } from "./definition";
+import type { AgentNode, EnvironmentVariable, ObserverRegion, Rect, SecretRequirement, Workflow, WorkflowBudgets, WorkflowRunConfiguration } from "./types";
 
 export const COMPACT_AGENT_SIZE = { width: 100, height: 108 } as const;
 const LEGACY_MODEL_PATTERN = /gpt-[\w.-]+/gi;
@@ -45,6 +46,43 @@ function normalizeEnvironmentVariables(value: unknown): EnvironmentVariable[] {
       value: candidate.value,
     }];
   });
+}
+
+function defaultBudgets(): WorkflowBudgets {
+  return {
+    maximumConcurrentAgents: 4,
+    maximumTotalAgents: 32,
+    maximumIterations: 12,
+    maximumWallClockMinutes: 120,
+    maximumNoProgressRounds: 2,
+  };
+}
+
+function normalizeBudgets(value: unknown): WorkflowBudgets {
+  const fallback = defaultBudgets();
+  if (!value || typeof value !== "object") return fallback;
+  const candidate = value as Partial<WorkflowBudgets>;
+  const integer = (input: unknown, defaultValue: number, minimum: number, maximum: number) =>
+    typeof input === "number" && Number.isInteger(input) ? Math.min(maximum, Math.max(minimum, input)) : defaultValue;
+  return {
+    maximumConcurrentAgents: integer(candidate.maximumConcurrentAgents, fallback.maximumConcurrentAgents, 1, 16),
+    maximumTotalAgents: integer(candidate.maximumTotalAgents, fallback.maximumTotalAgents, 1, 1_000),
+    maximumIterations: integer(candidate.maximumIterations, fallback.maximumIterations, 1, 1_000),
+    maximumWallClockMinutes: integer(candidate.maximumWallClockMinutes, fallback.maximumWallClockMinutes, 1, 10_080),
+    maximumTokens: typeof candidate.maximumTokens === "number" && candidate.maximumTokens > 0 ? Math.floor(candidate.maximumTokens) : undefined,
+    maximumNoProgressRounds: integer(candidate.maximumNoProgressRounds, fallback.maximumNoProgressRounds, 1, 20),
+  };
+}
+
+function migrateLegacyEnvironmentVariables(workflow: Workflow): SecretRequirement[] {
+  const legacy = normalizeEnvironmentVariables((workflow as unknown as { environmentVariables?: unknown }).environmentVariables);
+  return legacy.filter((entry) => entry.key.trim()).map((entry) => ({
+    id: `secret-${entry.id}`,
+    key: entry.key.trim(),
+    description: `Migrated environment requirement for ${entry.key.trim()}`,
+    status: "required",
+    requiredByNodeIds: workflow.nodes.map((node) => node.id),
+  }));
 }
 
 function defaultRunConfiguration(): WorkflowRunConfiguration {
@@ -102,15 +140,50 @@ export function normalizeWorkflow(workflow: Workflow): Workflow {
         upgradeModelTo: normalizeAgentModel(node.retryPolicy?.upgradeModelTo, "reviewer"),
       },
       size: COMPACT_AGENT_SIZE,
+      kind: node.kind ?? "agent",
     };
   });
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
-  return {
+  const existingThreads = new Map(workflow.threads.map((thread) => [thread.nodeId, thread]));
+  const threads = nodes.map((node) => {
+    const thread = existingThreads.get(node.id);
+    if (thread) return {
+      ...thread,
+      id: node.threadId,
+      nodeId: node.id,
+      title: node.name,
+      task: node.task,
+      definitionOfDone: node.definitionOfDone,
+      connectors: [...node.connectors],
+    };
+    return {
+      id: node.threadId,
+      nodeId: node.id,
+      title: node.name,
+      task: node.task,
+      definitionOfDone: node.definitionOfDone,
+      model: node.effectiveModel,
+      connectors: [...node.connectors],
+      status: "idle" as const,
+      messages: [{ id: `${node.threadId}-assignment`, role: "system" as const, content: `Assigned by Codex Loop: ${node.task}`, timestamp: new Date().toISOString() }],
+      toolCalls: [],
+      fileChanges: [],
+      attempts: [],
+      codex: { state: "disconnected" as const },
+    };
+  });
+  const normalized = {
     ...workflow,
+    schemaVersion: 2 as const,
+    revision: Number.isInteger(workflow.revision) && workflow.revision >= 0 ? workflow.revision : 0,
+    lifecycle: workflow.lifecycle ?? (workflow.saved ? "published" : "draft"),
     executionBackend: workflow.executionBackend ?? "codex",
     runConfiguration: normalizeRunConfiguration(workflow.runConfiguration),
     defaultModel: normalizeAgentModel(workflow.defaultModel, "tester"),
-    environmentVariables: normalizeEnvironmentVariables(workflow.environmentVariables),
+    configurationValues: Array.isArray(workflow.configurationValues) ? normalizeEnvironmentVariables(workflow.configurationValues) : [],
+    capabilityBindings: Array.isArray(workflow.capabilityBindings) ? workflow.capabilityBindings : [],
+    secretRequirements: Array.isArray(workflow.secretRequirements) ? workflow.secretRequirements : migrateLegacyEnvironmentVariables(workflow),
+    budgets: normalizeBudgets(workflow.budgets),
     nodes,
     observers: [createLoopSupervisor(nodes, workflow.observers[0])],
     events: workflow.events.map((event) => {
@@ -123,12 +196,32 @@ export function normalizeWorkflow(workflow: Workflow): Workflow {
     }),
     attentionRequests: Array.isArray(workflow.attentionRequests) ? workflow.attentionRequests : [],
     interventions: Array.isArray(workflow.interventions) ? workflow.interventions : [],
-    runs: workflow.runs.map((run) => ({ ...run, source: run.source ?? "manual" })),
-    threads: workflow.threads.map((thread) => ({
+    runs: workflow.runs.map((run) => ({
+      ...run,
+      source: run.source ?? "manual",
+      consumedAgents: Math.max(0, run.consumedAgents ?? 0),
+      consumedIterations: Math.max(0, run.consumedIterations ?? 0),
+      consumedTokens: Math.max(0, run.consumedTokens ?? 0),
+      noProgressRounds: Math.max(0, run.noProgressRounds ?? 0),
+      checkpoints: Array.isArray(run.checkpoints) ? run.checkpoints : [],
+    })),
+    threads: threads.map((thread) => ({
       ...thread,
       codex: thread.codex ?? { state: "disconnected" },
       model: nodeById.get(thread.nodeId)?.effectiveModel ?? normalizeAgentModel(thread.model),
       attempts: thread.attempts.map((attempt) => ({ ...attempt, model: normalizeAgentModel(attempt.model) })),
     })),
+    designer: workflow.designer ?? {
+      modelRole: "planner" as const,
+      configuredModel: "gpt-5.6-sol",
+      state: "disconnected" as const,
+      messages: [],
+      assumptions: [],
+      pendingQuestions: [],
+    },
+    mutations: Array.isArray(workflow.mutations) ? workflow.mutations : [],
+    validationIssues: [] as Workflow["validationIssues"],
   };
+  normalized.validationIssues = validateWorkflowDefinition(workflowDefinition(normalized));
+  return normalized;
 }

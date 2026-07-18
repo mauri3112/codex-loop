@@ -10,6 +10,9 @@ const kindOrder: Record<TaskCapabilityKind, number> = {
   "computer-use": 0,
   skill: 1,
   mcp: 2,
+  app: 3,
+  cli: 4,
+  shell: 5,
 };
 
 export function findSlashQuery(value: string, caret: number): SlashQuery | null {

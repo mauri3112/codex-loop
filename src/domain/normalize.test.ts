@@ -30,7 +30,8 @@ describe("workflow normalization", () => {
     expect(normalized.observers[0].name).toBe("Loop supervisor");
     expect(normalized.observers[0].coveredNodeIds).toEqual(normalized.nodes.map((node) => node.id));
     expect(normalized.events[0].message).toBe("Started with Luna");
-    expect(normalized.environmentVariables).toEqual([]);
+    expect(normalized.configurationValues).toEqual([]);
+    expect(normalized.secretRequirements).toEqual([]);
     expect(normalized.attentionRequests).toEqual([]);
     expect(normalized.interventions).toEqual([]);
   });

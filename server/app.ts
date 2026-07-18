@@ -2,14 +2,19 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
-import type { Workflow } from "../src/domain/types.js";
+import { validateWorkflowDefinition, workflowDefinition } from "../src/domain/definition.js";
+import type { Workflow, WorkflowDefinition } from "../src/domain/types.js";
 import { createBlankWorkflow, createGeneratedWorkflow } from "../src/data/seed.js";
-import { JsonWorkflowStore, WorkflowNotFoundError } from "./store.js";
+import { JsonWorkflowStore, WorkflowNotFoundError, WorkflowRevisionConflictError, WorkflowValidationError } from "./store.js";
 import { BridgeConflictError, BridgeInputError, BridgeResourceNotFoundError, CodexBridge, type CodexBridgeService } from "./codex-bridge.js";
+import { CodexLoopDesigner, type LoopDesignerService } from "./loop-designer.js";
+import { handleMcpRequest } from "./mcp.js";
 
 const generateSchema = z.object({ task: z.string().trim().min(1).max(12_000) });
 const instructionSchema = z.object({ instruction: z.string().trim().min(1).max(12_000) });
+const designerMessageSchema = z.object({ message: z.string().trim().min(1).max(12_000) });
 const approvalSchema = z.object({ decision: z.enum(["accept", "decline"]) });
+const gateDecisionSchema = z.object({ decision: z.enum(["approve", "decline"]) });
 const runActionSchema = z.enum(["start", "pause", "resume", "stop", "reset"]);
 const runConfigurationSchema = z.object({
   mode: z.enum(["single", "scheduled", "webhook"]),
@@ -45,6 +50,16 @@ const attentionResponseSchema = z.object({
   expectedTurnId: z.string().min(1).max(256).optional(),
   answers: z.record(z.string(), z.union([z.string().max(12_000), z.array(z.string().max(12_000)).min(1).max(20)])),
 });
+const workflowDefinitionSchema = z.custom<WorkflowDefinition>((value) => Boolean(
+  value && typeof value === "object" && typeof (value as WorkflowDefinition).name === "string" &&
+  Array.isArray((value as WorkflowDefinition).nodes) && Array.isArray((value as WorkflowDefinition).edges),
+), "Invalid workflow definition");
+const definitionMutationSchema = z.object({
+  baseRevision: z.number().int().nonnegative(),
+  actor: z.enum(["user", "designer", "system", "mcp"]),
+  rationale: z.string().trim().min(1).max(2_000),
+  definition: workflowDefinitionSchema,
+});
 
 const workflowSchema = z.custom<Workflow>((value) => {
   if (!value || typeof value !== "object") return false;
@@ -72,7 +87,11 @@ function asyncRoute(
   };
 }
 
-export function createApp(store = new JsonWorkflowStore(), bridge: CodexBridgeService = new CodexBridge(store)) {
+export function createApp(
+  store = new JsonWorkflowStore(),
+  bridge: CodexBridgeService = new CodexBridge(store),
+  designer: LoopDesignerService = new CodexLoopDesigner(store, bridge),
+) {
   const app = express();
   app.disable("x-powered-by");
   app.use(express.json({ limit: "2mb" }));
@@ -88,6 +107,10 @@ export function createApp(store = new JsonWorkflowStore(), bridge: CodexBridgeSe
       builtAt: process.env.CODEX_LOOP_BUILT_AT ?? "unknown",
     });
   });
+
+  app.post("/mcp", asyncRoute(async (request, response) => {
+    await handleMcpRequest(request, response, { store, bridge, designer });
+  }));
 
   app.get("/api/bridge/status", (_request, response) => {
     response.json(bridge.status());
@@ -115,8 +138,14 @@ export function createApp(store = new JsonWorkflowStore(), bridge: CodexBridgeSe
     "/api/workflows/:id/run-configuration",
     asyncRoute(async (request, response) => {
       const runConfiguration = runConfigurationSchema.parse(request.body);
-      response.json(await store.mutateWorkflow(String(request.params.id), (workflow) => {
-        workflow.runConfiguration = runConfiguration;
+      const workflowId = String(request.params.id);
+      const current = await store.getWorkflow(workflowId);
+      const definition = workflowDefinition(current);
+      definition.runConfiguration = runConfiguration;
+      response.json(await store.applyDefinitionMutation(workflowId, definition, {
+        baseRevision: current.revision,
+        actor: "user",
+        rationale: `Updated ${runConfiguration.mode} run configuration`,
       }));
     }),
   );
@@ -147,7 +176,7 @@ export function createApp(store = new JsonWorkflowStore(), bridge: CodexBridgeSe
   const triggerWorkflow = async (request: Request, response: Response) => {
     const token = String(request.params.token);
     const { workflows } = await store.getData();
-    const workflow = workflows.find((candidate) => candidate.runConfiguration.mode === "webhook" && candidate.runConfiguration.webhook.token === token);
+    const workflow = workflows.find((candidate) => candidate.lifecycle === "published" && candidate.runConfiguration.mode === "webhook" && candidate.runConfiguration.webhook.token === token);
     if (!workflow) {
       response.status(404).json({ error: "Trigger not found" });
       return;
@@ -194,6 +223,38 @@ export function createApp(store = new JsonWorkflowStore(), bridge: CodexBridgeSe
   );
 
   app.post(
+    "/api/workflows/:id/validate",
+    asyncRoute(async (request, response) => {
+      const workflow = await store.getWorkflow(String(request.params.id));
+      response.json({ revision: workflow.revision, issues: validateWorkflowDefinition(workflowDefinition(workflow)) });
+    }),
+  );
+
+  app.post(
+    "/api/workflows/:id/mutations",
+    asyncRoute(async (request, response) => {
+      const input = definitionMutationSchema.parse(request.body);
+      response.status(201).json(await store.applyDefinitionMutation(String(request.params.id), input.definition, input));
+    }),
+  );
+
+  app.post(
+    "/api/workflows/:id/designer/messages",
+    asyncRoute(async (request, response) => {
+      const { message } = designerMessageSchema.parse(request.body);
+      response.json(await designer.sendMessage(String(request.params.id), message));
+    }),
+  );
+
+  app.post(
+    "/api/workflows/:id/undo",
+    asyncRoute(async (request, response) => {
+      const mutationId = z.object({ mutationId: z.string().min(1).optional() }).parse(request.body ?? {}).mutationId;
+      response.json(await store.undoWorkflowMutation(String(request.params.id), mutationId));
+    }),
+  );
+
+  app.post(
     "/api/workflows/:id/run/:action",
     asyncRoute(async (request, response) => {
       const action = runActionSchema.parse(request.params.action);
@@ -222,6 +283,15 @@ export function createApp(store = new JsonWorkflowStore(), bridge: CodexBridgeSe
     asyncRoute(async (request, response) => {
       const input = attentionResponseSchema.parse(request.body);
       response.json(await bridge.respondToAttention(String(request.params.id), String(request.params.attentionId), input));
+    }),
+  );
+
+  app.post(
+    "/api/workflows/:id/gates/:nodeId",
+    asyncRoute(async (request, response) => {
+      if (!bridge.resolveGate) { response.status(501).json({ error: "This Codex bridge cannot resolve approval gates" }); return; }
+      const { decision } = gateDecisionSchema.parse(request.body);
+      response.json(await bridge.resolveGate(String(request.params.id), String(request.params.nodeId), decision));
     }),
   );
 
@@ -280,6 +350,14 @@ export function createApp(store = new JsonWorkflowStore(), bridge: CodexBridgeSe
     }
     if (error instanceof WorkflowNotFoundError) {
       response.status(404).json({ error: error.message });
+      return;
+    }
+    if (error instanceof WorkflowRevisionConflictError) {
+      response.status(409).json({ error: error.message });
+      return;
+    }
+    if (error instanceof WorkflowValidationError) {
+      response.status(422).json({ error: error.message });
       return;
     }
     if (error instanceof z.ZodError) {

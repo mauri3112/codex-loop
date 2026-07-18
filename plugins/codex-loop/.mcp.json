@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "codex-loop": {
+      "url": "http://127.0.0.1:4317/mcp",
+      "bearer_token_env_var": "CODEX_LOOP_MCP_TOKEN"
+    }
+  }
+}

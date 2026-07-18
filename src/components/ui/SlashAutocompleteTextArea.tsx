@@ -8,13 +8,16 @@ const groupLabels: Record<TaskCapabilityKind, string> = {
   "computer-use": "Computer use",
   skill: "Skills",
   mcp: "MCP servers",
+  app: "Apps",
+  cli: "Command-line tools",
+  shell: "Shell",
 };
 
-const groupOrder: TaskCapabilityKind[] = ["computer-use", "skill", "mcp"];
+const groupOrder: TaskCapabilityKind[] = ["computer-use", "skill", "mcp", "app", "cli", "shell"];
 
 function CapabilityIcon({ kind }: { kind: TaskCapabilityKind }) {
   if (kind === "computer-use") return <MonitorCog size={14} aria-hidden="true" />;
-  if (kind === "mcp") return <Blocks size={14} aria-hidden="true" />;
+  if (["mcp", "app", "cli", "shell"].includes(kind)) return <Blocks size={14} aria-hidden="true" />;
   return <Sparkles size={14} aria-hidden="true" />;
 }
 

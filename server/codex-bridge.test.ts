@@ -21,7 +21,7 @@ describe("Codex app-server bridge", () => {
   it("creates native threads, streams tool and assistant events, and schedules the workflow graph", async () => {
     directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-bridge-"));
     const store = new JsonWorkflowStore(path.join(directory, "data.json"));
-    const workflow = await store.addWorkflow(createGeneratedWorkflow("Verify the native bridge"));
+    const workflow = await store.addWorkflow(createGeneratedWorkflow("Verify the native bridge", { saved: true }));
     const client = new CodexAppServerClient({ command: process.execPath, args: [fixture] });
     bridge = new CodexBridge(store, client);
 
@@ -39,10 +39,20 @@ describe("Codex app-server bridge", () => {
     expect(completed.events.some((event) => event.type === "workflow.completed")).toBe(true);
   });
 
+  it("refuses to execute an unpublished draft", async () => {
+    directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-draft-"));
+    const store = new JsonWorkflowStore(path.join(directory, "data.json"));
+    const workflow = await store.addWorkflow(createGeneratedWorkflow("Do not execute this draft"));
+    bridge = new CodexBridge(store, new CodexAppServerClient({ command: process.execPath, args: [fixture] }));
+
+    await expect(bridge.startWorkflow(workflow.id)).rejects.toThrow("Publish this Loop revision");
+    expect((await store.getWorkflow(workflow.id)).runs).toHaveLength(0);
+  });
+
   it("surfaces app-server approvals and resumes after the user accepts", async () => {
     directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-approval-"));
     const store = new JsonWorkflowStore(path.join(directory, "data.json"));
-    const workflow = await store.addWorkflow(createGeneratedWorkflow("Verify approval routing"));
+    const workflow = await store.addWorkflow(createGeneratedWorkflow("Verify approval routing", { saved: true }));
     const client = new CodexAppServerClient({ command: process.execPath, args: [fixture], env: { FAKE_APPROVAL: "1" } });
     bridge = new CodexBridge(store, client);
 
@@ -65,7 +75,7 @@ describe("Codex app-server bridge", () => {
   it("captures structured user-input requests, forwards answers, and never persists secrets", async () => {
     directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-input-"));
     const store = new JsonWorkflowStore(path.join(directory, "data.json"));
-    const workflow = await store.addWorkflow(createGeneratedWorkflow("Verify user input routing"));
+    const workflow = await store.addWorkflow(createGeneratedWorkflow("Verify user input routing", { saved: true }));
     const client = new CodexAppServerClient({ command: process.execPath, args: [fixture], env: { FAKE_USER_INPUT: "1" } });
     bridge = new CodexBridge(store, client);
 
@@ -96,7 +106,7 @@ describe("Codex app-server bridge", () => {
   it("expires native input when the app-server disconnects", async () => {
     directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-input-exit-"));
     const store = new JsonWorkflowStore(path.join(directory, "data.json"));
-    const workflow = await store.addWorkflow(createGeneratedWorkflow("Expire disconnected input"));
+    const workflow = await store.addWorkflow(createGeneratedWorkflow("Expire disconnected input", { saved: true }));
     const client = new CodexAppServerClient({ command: process.execPath, args: [fixture], env: { FAKE_USER_INPUT: "1", FAKE_EXIT_AFTER_INPUT: "1" } });
     bridge = new CodexBridge(store, client);
 
@@ -114,7 +124,7 @@ describe("Codex app-server bridge", () => {
   it("expires persisted native input during cold runtime preparation", async () => {
     directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-input-restart-"));
     const store = new JsonWorkflowStore(path.join(directory, "data.json"));
-    const workflow = await store.addWorkflow(createGeneratedWorkflow("Expire input after restart"));
+    const workflow = await store.addWorkflow(createGeneratedWorkflow("Expire input after restart", { saved: true }));
     await store.mutateWorkflow(workflow.id, (draft) => {
       draft.status = "running";
       draft.runs.push({ id: "run-restart", status: "running", step: 0, startedAt: new Date().toISOString() });
@@ -140,7 +150,7 @@ describe("Codex app-server bridge", () => {
   it("persists retry-exhausted attention in the same terminal failure transition", async () => {
     directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-retry-attention-"));
     const store = new JsonWorkflowStore(path.join(directory, "data.json"));
-    const workflow = await store.addWorkflow(createGeneratedWorkflow("Surface exhausted retries"));
+    const workflow = await store.addWorkflow(createGeneratedWorkflow("Surface exhausted retries", { saved: true }));
     const client = new CodexAppServerClient({ command: process.execPath, args: [fixture], env: { FAKE_TURN_FAILURE: "1" } });
     bridge = new CodexBridge(store, client);
 
@@ -156,10 +166,141 @@ describe("Codex app-server bridge", () => {
     expect(failed.current.events.some((event) => event.type === "attention.retry-exhausted")).toBe(true);
   });
 
+  it("routes condition branches and explicitly skips unselected work", async () => {
+    directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-condition-"));
+    const store = new JsonWorkflowStore(path.join(directory, "data.json"));
+    const workflow = await store.addWorkflow(createGeneratedWorkflow("Route one verified branch", { saved: true }));
+    const [condition, selected, skipped] = workflow.nodes;
+    await store.mutateWorkflow(workflow.id, (draft) => {
+      draft.nodes = draft.nodes.slice(0, 3);
+      draft.threads = draft.threads.filter((thread) => draft.nodes.some((node) => node.id === thread.nodeId));
+      draft.nodes[0].kind = "condition";
+      draft.nodes[0].orchestration = { conditionExpression: "Choose the branch supported by the result" };
+      draft.edges = [
+        { ...draft.edges[0], id: "condition-selected", source: condition.id, target: selected.id, status: "idle" },
+        { ...draft.edges[1], id: "condition-skipped", source: condition.id, target: skipped.id, status: "idle" },
+      ];
+    });
+    bridge = new CodexBridge(store, new CodexAppServerClient({ command: process.execPath, args: [fixture], env: { FAKE_AGENT_OUTPUT: `ROUTE: ${selected.name}` } }));
+
+    await bridge.startWorkflow(workflow.id);
+    const completed = await waitFor(async () => {
+      const current = await store.getWorkflow(workflow.id);
+      return current.status === "completed" ? current : undefined;
+    });
+    expect(completed.nodes.find((node) => node.id === selected.id)?.status).toBe("completed");
+    expect(completed.nodes.find((node) => node.id === skipped.id)?.status).toBe("skipped");
+    expect(completed.edges.find((edge) => edge.target === skipped.id)?.status).toBe("skipped");
+  });
+
+  it("bounds explicit loop iterations and records each pass", async () => {
+    directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-iteration-"));
+    const store = new JsonWorkflowStore(path.join(directory, "data.json"));
+    const workflow = await store.addWorkflow(createGeneratedWorkflow("Repeat with a hard stop", { saved: true }));
+    await store.mutateWorkflow(workflow.id, (draft) => {
+      draft.nodes = draft.nodes.slice(0, 1);
+      draft.threads = draft.threads.slice(0, 1);
+      draft.edges = [];
+      draft.nodes[0].kind = "loop";
+      draft.nodes[0].orchestration = { stopCondition: "Stop after two additional checks", maximumIterations: 2 };
+      draft.budgets.maximumIterations = 2;
+    });
+    bridge = new CodexBridge(store, new CodexAppServerClient({ command: process.execPath, args: [fixture], env: { FAKE_AGENT_OUTPUT: "LOOP_STATUS: continue" } }));
+
+    await bridge.startWorkflow(workflow.id);
+    const completed = await waitFor(async () => {
+      const current = await store.getWorkflow(workflow.id);
+      return current.status === "completed" ? current : undefined;
+    });
+    expect(completed.runs.at(-1)?.consumedIterations).toBe(2);
+    expect(completed.nodes[0].attempt).toBe(3);
+    expect(completed.events.filter((event) => event.type === "loop.iteration")).toHaveLength(2);
+  });
+
+  it("stops a loop after its configured no-progress rounds", async () => {
+    directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-no-progress-"));
+    const store = new JsonWorkflowStore(path.join(directory, "data.json"));
+    const workflow = await store.addWorkflow(createGeneratedWorkflow("Stop repeated output", { saved: true }));
+    await store.mutateWorkflow(workflow.id, (draft) => {
+      draft.nodes = draft.nodes.slice(0, 1);
+      draft.threads = draft.threads.slice(0, 1);
+      draft.edges = [];
+      draft.nodes[0].kind = "loop";
+      draft.nodes[0].orchestration = { stopCondition: "Stop when the evidence changes", maximumIterations: 5 };
+      draft.budgets.maximumIterations = 5;
+      draft.budgets.maximumNoProgressRounds = 1;
+    });
+    bridge = new CodexBridge(store, new CodexAppServerClient({ command: process.execPath, args: [fixture], env: { FAKE_AGENT_OUTPUT: "LOOP_STATUS: continue" } }));
+
+    await bridge.startWorkflow(workflow.id);
+    const failed = await waitFor(async () => {
+      const current = await store.getWorkflow(workflow.id);
+      return current.status === "failed" ? current : undefined;
+    });
+    expect(failed.runs.at(-1)?.noProgressRounds).toBe(1);
+    expect(failed.runs.at(-1)?.consumedIterations).toBe(1);
+    expect(failed.nodes[0].status).toBe("stopped");
+    expect(failed.events.some((event) => event.type === "workflow.budget-exhausted" && event.message.includes("No progress"))).toBe(true);
+  });
+
+  it("tracks app-server token usage and interrupts work at the token ceiling", async () => {
+    directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-token-budget-"));
+    const store = new JsonWorkflowStore(path.join(directory, "data.json"));
+    const workflow = await store.addWorkflow(createGeneratedWorkflow("Respect the token ceiling", { saved: true }));
+    await store.mutateWorkflow(workflow.id, (draft) => {
+      draft.nodes = draft.nodes.slice(0, 1);
+      draft.threads = draft.threads.slice(0, 1);
+      draft.edges = [];
+      draft.budgets.maximumTokens = 50;
+    });
+    bridge = new CodexBridge(store, new CodexAppServerClient({ command: process.execPath, args: [fixture], env: { FAKE_TOKEN_TOTAL: "100", FAKE_TURN_DELAY_MS: "50" } }));
+
+    await bridge.startWorkflow(workflow.id);
+    const failed = await waitFor(async () => {
+      const current = await store.getWorkflow(workflow.id);
+      return current.status === "failed" ? current : undefined;
+    });
+    expect(failed.runs.at(-1)?.consumedTokens).toBe(100);
+    expect(failed.nodes[0].status).toBe("stopped");
+    expect(failed.events.some((event) => event.type === "workflow.budget-exhausted" && event.message.includes("Token budget"))).toBe(true);
+  });
+
+  it("waits at a human gate and continues only after explicit approval", async () => {
+    directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-gate-"));
+    const store = new JsonWorkflowStore(path.join(directory, "data.json"));
+    const workflow = await store.addWorkflow(createGeneratedWorkflow("Require approval before execution", { saved: true }));
+    const [gate, worker] = workflow.nodes;
+    await store.mutateWorkflow(workflow.id, (draft) => {
+      draft.nodes = draft.nodes.slice(0, 2);
+      draft.threads = draft.threads.slice(0, 2);
+      draft.nodes[0].kind = "gate";
+      draft.nodes[0].task = "Approve the consequential worker";
+      draft.edges = [{ ...draft.edges[0], id: "gate-worker", source: gate.id, target: worker.id, status: "idle" }];
+    });
+    bridge = new CodexBridge(store, new CodexAppServerClient({ command: process.execPath, args: [fixture] }));
+
+    await bridge.startWorkflow(workflow.id);
+    const waiting = await waitFor(async () => {
+      const current = await store.getWorkflow(workflow.id);
+      const attention = current.attentionRequests.find((request) => request.kind === "approval-gate" && request.status === "open");
+      return attention ? { current, attention } : undefined;
+    });
+    expect(waiting.current.nodes.find((node) => node.id === gate.id)?.status).toBe("blocked");
+    expect(waiting.current.nodes.find((node) => node.id === worker.id)?.status).toBe("waiting");
+
+    await bridge.resolveGate(workflow.id, gate.id, "approve");
+    const completed = await waitFor(async () => {
+      const current = await store.getWorkflow(workflow.id);
+      return current.status === "completed" ? current : undefined;
+    });
+    expect(completed.nodes.every((node) => node.status === "completed")).toBe(true);
+    expect(completed.events.some((event) => event.type === "gate.approved")).toBe(true);
+  });
+
   it("delivers a queued intervention exactly once and deduplicates retries", async () => {
     directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-queue-"));
     const store = new JsonWorkflowStore(path.join(directory, "data.json"));
-    const workflow = await store.addWorkflow(createGeneratedWorkflow("Verify queued interventions"));
+    const workflow = await store.addWorkflow(createGeneratedWorkflow("Verify queued interventions", { saved: true }));
     const client = new CodexAppServerClient({ command: process.execPath, args: [fixture], env: { FAKE_TURN_DELAY_MS: "80" } });
     bridge = new CodexBridge(store, client);
 

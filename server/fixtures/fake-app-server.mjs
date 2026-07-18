@@ -12,7 +12,7 @@ const send = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 
 function completeTurn(threadId, turnId) {
   const command = { type: "commandExecution", id: `command-${turnId}`, command: "printf bridge-ok", cwd: process.cwd(), processId: null, source: "agent", status: "completed", commandActions: [], aggregatedOutput: "bridge-ok", exitCode: 0, durationMs: 1 };
-  const agent = { type: "agentMessage", id: `message-${turnId}`, text: `Native result for ${threadId}`, phase: "final_answer", memoryCitation: null };
+  const agent = { type: "agentMessage", id: `message-${turnId}`, text: process.env.FAKE_AGENT_OUTPUT || `Native result for ${threadId}`, phase: "final_answer", memoryCitation: null };
   send({ method: "item/started", params: { threadId, turnId, item: { ...command, status: "inProgress" }, startedAtMs: Date.now() } });
   send({ method: "item/completed", params: { threadId, turnId, item: command, completedAtMs: Date.now() } });
   send({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: agent.id, delta: agent.text } });
@@ -48,6 +48,11 @@ lines.on("line", (line) => {
     const turnId = `native-turn-${++turnSequence}`;
     send({ id: message.id, result: { turn: { id: turnId, status: "inProgress" } } });
     send({ method: "turn/started", params: { threadId: message.params.threadId, turn: { id: turnId, status: "inProgress" } } });
+    if (process.env.FAKE_TOKEN_TOTAL) {
+      const totalTokens = Number(process.env.FAKE_TOKEN_TOTAL);
+      const breakdown = { inputTokens: totalTokens, cachedInputTokens: 0, outputTokens: 0, reasoningOutputTokens: 0, totalTokens };
+      send({ method: "thread/tokenUsage/updated", params: { threadId: message.params.threadId, turnId, tokenUsage: { total: breakdown, last: breakdown, modelContextWindow: 258400 } } });
+    }
     if (process.env.FAKE_TURN_FAILURE === "1") {
       queueMicrotask(() => failTurn(message.params.threadId, turnId));
     } else if (process.env.FAKE_APPROVAL === "1" && !approvalSent) {

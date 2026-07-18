@@ -1,12 +1,13 @@
 import { useState, type FormEvent, type ReactNode } from "react";
-import { Bot, Database, Eye, EyeOff, GitBranch, KeyRound, Plus, Settings2, Trash2, X } from "lucide-react";
+import { Bot, Database, Eye, GitBranch, KeyRound, Plus, Settings2, Trash2, X } from "lucide-react";
 import type {
   AgentNode,
   ContextBlock,
-  EnvironmentVariable,
+  SecretRequirement,
   ObserverRegion,
   Selection,
   Workflow,
+  WorkflowConfigurationValue,
   WorkflowEdge,
 } from "../../domain/types";
 import { AGENT_MODELS, EFFORT_LEVELS, defaultReasoningEffort, effortLabel } from "../../domain/models";
@@ -104,7 +105,7 @@ function WorkflowInspector({ workflow, update }: { workflow: Workflow; update: (
       <InspectorHeader icon={<Settings2 size={15} />} eyebrow="Workflow" title={workflow.name} />
       <div className="loop-inspector-tabs" role="tablist" aria-label="Workflow settings">
         <button id="workflow-settings-tab" type="button" role="tab" aria-selected={tab === "settings"} aria-controls="workflow-settings-panel" onClick={() => setTab("settings")}>Settings</button>
-        <button id="workflow-environment-tab" type="button" role="tab" aria-selected={tab === "environment"} aria-controls="workflow-environment-panel" onClick={() => setTab("environment")}><KeyRound size={12} aria-hidden="true" /> Environment</button>
+        <button id="workflow-environment-tab" type="button" role="tab" aria-selected={tab === "environment"} aria-controls="workflow-environment-panel" onClick={() => setTab("environment")}><KeyRound size={12} aria-hidden="true" /> Resources</button>
       </div>
       {tab === "settings" ? (
         <div className="loop-inspector-scroll" id="workflow-settings-panel" role="tabpanel" aria-labelledby="workflow-settings-tab">
@@ -129,93 +130,87 @@ function WorkflowInspector({ workflow, update }: { workflow: Workflow; update: (
               </select>
             </Field>
             <Field label="Maximum retries"><input type="number" min={0} max={10} value={workflow.maximumRetries} onChange={(event) => update({ maximumRetries: event.target.valueAsNumber || 0 })} /></Field>
+            <Field label="Concurrent agents"><input type="number" min={1} max={16} value={workflow.budgets.maximumConcurrentAgents} onChange={(event) => update({ budgets: { ...workflow.budgets, maximumConcurrentAgents: event.target.valueAsNumber || 1 } })} /></Field>
+            <Field label="Total-agent budget"><input type="number" min={1} max={1000} value={workflow.budgets.maximumTotalAgents} onChange={(event) => update({ budgets: { ...workflow.budgets, maximumTotalAgents: event.target.valueAsNumber || 1 } })} /></Field>
+            <Field label="Iteration budget"><input type="number" min={1} max={1000} value={workflow.budgets.maximumIterations} onChange={(event) => update({ budgets: { ...workflow.budgets, maximumIterations: event.target.valueAsNumber || 1 } })} /></Field>
+            <Field label="Time budget (minutes)"><input type="number" min={1} max={10080} value={workflow.budgets.maximumWallClockMinutes} onChange={(event) => update({ budgets: { ...workflow.budgets, maximumWallClockMinutes: event.target.valueAsNumber || 1 } })} /></Field>
             <Field label="Shared connectors" hint="Comma-separated"><TextInput value={workflow.sharedConnectors.join(", ")} onChange={(value) => update({ sharedConnectors: csv(value) })} /></Field>
           </Section>
         </div>
       ) : (
-        <EnvironmentVariables
-          variables={workflow.environmentVariables}
-          onChange={(environmentVariables) => update({ environmentVariables })}
+        <ResourceRequirements
+          values={workflow.configurationValues}
+          secrets={workflow.secretRequirements}
+          onValuesChange={(configurationValues) => update({ configurationValues })}
+          onSecretsChange={(secretRequirements) => update({ secretRequirements })}
         />
       )}
     </>
   );
 }
 
-function makeEnvironmentVariableId(): string {
+function makeResourceId(prefix: string): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? `environment-${crypto.randomUUID()}`
-    : `environment-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    ? `${prefix}-${crypto.randomUUID()}`
+    : `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function EnvironmentVariables({ variables, onChange }: {
-  variables: EnvironmentVariable[];
-  onChange: (variables: EnvironmentVariable[]) => void;
+function ResourceRequirements({ values, secrets, onValuesChange, onSecretsChange }: {
+  values: WorkflowConfigurationValue[];
+  secrets: SecretRequirement[];
+  onValuesChange: (values: WorkflowConfigurationValue[]) => void;
+  onSecretsChange: (secrets: SecretRequirement[]) => void;
 }) {
   const [draftKey, setDraftKey] = useState("");
   const [draftValue, setDraftValue] = useState("");
-  const [visibleIds, setVisibleIds] = useState<Set<string>>(() => new Set());
+  const [draftSecretKey, setDraftSecretKey] = useState("");
   const normalizedDraftKey = draftKey.trim();
-  const duplicateKey = variables.some((variable) => variable.key === normalizedDraftKey);
+  const duplicateKey = values.some((variable) => variable.key === normalizedDraftKey);
 
-  const addVariable = (event: FormEvent<HTMLFormElement>) => {
+  const addValue = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!normalizedDraftKey || duplicateKey) return;
-    onChange([...variables, { id: makeEnvironmentVariableId(), key: normalizedDraftKey, value: draftValue }]);
+    onValuesChange([...values, { id: makeResourceId("configuration"), key: normalizedDraftKey, value: draftValue }]);
     setDraftKey("");
     setDraftValue("");
   };
 
-  const updateVariable = (id: string, patch: Partial<EnvironmentVariable>) => {
-    onChange(variables.map((variable) => variable.id === id ? { ...variable, ...patch } : variable));
-  };
-
-  const removeVariable = (id: string) => {
-    onChange(variables.filter((variable) => variable.id !== id));
-    setVisibleIds((current) => {
-      if (!current.has(id)) return current;
-      const next = new Set(current);
-      next.delete(id);
-      return next;
-    });
-  };
-
-  const toggleVisible = (id: string) => {
-    setVisibleIds((current) => {
-      const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  const addSecret = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const key = draftSecretKey.trim();
+    if (!key || secrets.some((secret) => secret.key === key)) return;
+    onSecretsChange([...secrets, { id: makeResourceId("secret"), key, description: `Credential required for ${key}`, status: "required", requiredByNodeIds: [] }]);
+    setDraftSecretKey("");
   };
 
   return (
     <div className="loop-inspector-scroll" id="workflow-environment-panel" role="tabpanel" aria-labelledby="workflow-environment-tab">
-      <Section title="Environment values">
-        <p className="loop-inspector-note">Add values that every Agent can use as workflow context. Values stay hidden until you reveal them.</p>
-        {variables.length ? (
+      <Section title="Non-secret configuration">
+        <p className="loop-inspector-note">These values are stored with the Loop. Never put tokens, passwords, or credentials here.</p>
+        {values.length ? (
           <div className="loop-environment-list">
-            {variables.map((variable) => {
-              const visible = visibleIds.has(variable.id);
-              return (
+            {values.map((variable) => (
                 <div className="loop-environment-row" key={variable.id}>
-                  <input aria-label={`Environment variable name ${variable.key}`} value={variable.key} onChange={(event) => updateVariable(variable.id, { key: event.target.value })} autoCapitalize="none" autoCorrect="off" spellCheck={false} />
+                  <input aria-label={`Configuration name ${variable.key}`} value={variable.key} onChange={(event) => onValuesChange(values.map((item) => item.id === variable.id ? { ...item, key: event.target.value } : item))} autoCapitalize="none" autoCorrect="off" spellCheck={false} />
                   <div className="loop-environment-value">
-                    <input aria-label={`Value for ${variable.key}`} type={visible ? "text" : "password"} value={variable.value} onChange={(event) => updateVariable(variable.id, { value: event.target.value })} autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck={false} />
-                    <button type="button" className="loop-environment-icon-button" aria-label={`${visible ? "Hide" : "Show"} value for ${variable.key}`} aria-pressed={visible} title={`${visible ? "Hide" : "Show"} value`} onClick={() => toggleVisible(variable.id)}>{visible ? <EyeOff size={14} /> : <Eye size={14} />}</button>
+                    <input aria-label={`Value for ${variable.key}`} type="text" value={variable.value} onChange={(event) => onValuesChange(values.map((item) => item.id === variable.id ? { ...item, value: event.target.value } : item))} autoCapitalize="none" autoCorrect="off" spellCheck={false} />
                   </div>
-                  <button type="button" className="loop-environment-icon-button" aria-label={`Remove ${variable.key}`} title="Remove variable" onClick={() => removeVariable(variable.id)}><Trash2 size={14} /></button>
+                  <button type="button" className="loop-environment-icon-button" aria-label={`Remove ${variable.key}`} title="Remove value" onClick={() => onValuesChange(values.filter((item) => item.id !== variable.id))}><Trash2 size={14} /></button>
                 </div>
-              );
-            })}
+            ))}
           </div>
-        ) : <p className="loop-inspector-empty">No environment values yet.</p>}
-        <form className="loop-environment-form" onSubmit={addVariable}>
-          <Field label="Name"><TextInput value={draftKey} onChange={setDraftKey} placeholder="API_TOKEN" /></Field>
-          <Field label="Value"><input type="password" value={draftValue} onChange={(event) => setDraftValue(event.target.value)} placeholder="Enter a value" autoComplete="new-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} /></Field>
+        ) : <p className="loop-inspector-empty">No configuration values yet.</p>}
+        <form className="loop-environment-form" onSubmit={addValue}>
+          <Field label="Name"><TextInput value={draftKey} onChange={setDraftKey} placeholder="DEPLOYMENT_REGION" /></Field>
+          <Field label="Value"><TextInput value={draftValue} onChange={setDraftValue} placeholder="eu-central-1" /></Field>
           {duplicateKey ? <p className="loop-environment-error" role="alert">That name is already in use.</p> : null}
-          <button className="loop-environment-add" type="submit" disabled={!normalizedDraftKey || duplicateKey}><Plus size={14} aria-hidden="true" /> Add variable</button>
+          <button className="loop-environment-add" type="submit" disabled={!normalizedDraftKey || duplicateKey}><Plus size={14} aria-hidden="true" /> Add value</button>
         </form>
+      </Section>
+      <Section title="Secret requirements">
+        <p className="loop-inspector-note">Store only the requirement and binding reference. Secret values never enter the Loop definition or agent prompt.</p>
+        {secrets.length ? <div className="loop-environment-list">{secrets.map((secret) => <div className="loop-environment-row" key={secret.id}><div className="loop-environment-value"><strong>{secret.key}</strong><small>{secret.status === "bound" ? `Bound via ${secret.source ?? "runtime"}` : "Setup required"}</small></div><button type="button" className="loop-environment-icon-button" aria-label={`Remove ${secret.key}`} onClick={() => onSecretsChange(secrets.filter((item) => item.id !== secret.id))}><Trash2 size={14} /></button></div>)}</div> : <p className="loop-inspector-empty">No secret requirements.</p>}
+        <form className="loop-environment-form" onSubmit={addSecret}><Field label="Environment binding"><TextInput value={draftSecretKey} onChange={setDraftSecretKey} placeholder="GITHUB_TOKEN" /></Field><button className="loop-environment-add" type="submit" disabled={!draftSecretKey.trim()}><Plus size={14} aria-hidden="true" /> Add requirement</button></form>
       </Section>
     </div>
   );
@@ -251,12 +246,22 @@ function AgentInspector({ workflow, agent, update, onRequestDelete }: {
               <option value="investigator">Investigator</option><option value="implementer">Implementer</option><option value="tester">Tester</option><option value="reviewer">Reviewer</option><option value="custom">Custom</option>
             </select>
           </Field>
+          <Field label="Orchestration kind">
+            <select value={agent.kind} onChange={(event) => update({ ...agent, kind: event.target.value as AgentNode["kind"] })}>
+              <option value="agent">Agent</option><option value="map">Map / fan out</option><option value="join">Join / synthesize</option><option value="condition">Condition</option><option value="loop">Loop until done</option><option value="verify">Independent verify</option><option value="gate">Human approval gate</option><option value="subworkflow">Subworkflow</option>
+            </select>
+          </Field>
           <div className="loop-inspector-field">
             <span>Task</span>
             <SlashAutocompleteTextArea value={agent.task} rows={5} placeholder="Describe the task, or type / for capabilities…" onChange={(task) => update({ ...agent, task })} />
             <small>Type / to add a skill, computer use, or MCP server.</small>
           </div>
           <Field label="Definition of done"><TextArea value={agent.definitionOfDone} rows={4} onChange={(definitionOfDone) => update({ ...agent, definitionOfDone })} /></Field>
+          {agent.kind === "map" ? <Field label="Collection expression"><TextInput value={agent.orchestration?.collectionExpression ?? ""} onChange={(collectionExpression) => update({ ...agent, orchestration: { ...agent.orchestration, collectionExpression } })} placeholder="changed files, issues, packages…" /></Field> : null}
+          {agent.kind === "condition" ? <Field label="Routing condition"><TextArea value={agent.orchestration?.conditionExpression ?? ""} onChange={(conditionExpression) => update({ ...agent, orchestration: { ...agent.orchestration, conditionExpression } })} rows={3} /></Field> : null}
+          {agent.kind === "loop" ? <><Field label="Stop condition"><TextArea value={agent.orchestration?.stopCondition ?? ""} onChange={(stopCondition) => update({ ...agent, orchestration: { ...agent.orchestration, stopCondition } })} rows={3} /></Field><Field label="Maximum iterations"><input type="number" min={1} max={workflow.budgets.maximumIterations} value={agent.orchestration?.maximumIterations ?? workflow.budgets.maximumIterations} onChange={(event) => update({ ...agent, orchestration: { ...agent.orchestration, maximumIterations: event.target.valueAsNumber || 1 } })} /></Field></> : null}
+          {agent.kind === "verify" ? <Field label="Verification rubric"><TextArea value={agent.orchestration?.verificationRubric ?? ""} onChange={(verificationRubric) => update({ ...agent, orchestration: { ...agent.orchestration, verificationRubric } })} rows={3} /></Field> : null}
+          {agent.kind === "subworkflow" ? <Field label="Published Loop id"><TextInput value={agent.orchestration?.subworkflowId ?? ""} onChange={(subworkflowId) => update({ ...agent, orchestration: { ...agent.orchestration, subworkflowId } })} placeholder="loop-…" /></Field> : null}
         </Section>
         <Section title="Runtime">
           <Field label="Model">

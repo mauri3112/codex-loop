@@ -13,6 +13,7 @@ const statusLabels: Record<string, string> = {
   failed: "Failed",
   retrying: "Retrying",
   completed: "Completed",
+  skipped: "Skipped",
   stopped: "Stopped",
 };
 
@@ -55,14 +56,14 @@ function AgentNodeView({ data, selected }: NodeProps<AgentFlowNode>) {
       </div>
       <div className="loop-celestial-caption">
         <strong>{agent.name}</strong>
-        <span><i className={`loop-status-dot loop-status-dot-${agent.status}`} aria-hidden="true" />{celestial.label}</span>
+        <span><i className={`loop-status-dot loop-status-dot-${agent.status}`} aria-hidden="true" />{agent.kind === "agent" ? celestial.label : agent.kind}</span>
       </div>
       <Handle className="loop-port loop-port-output" type="source" position={Position.Right} />
 
       <aside id={tooltipId} role="tooltip" className={`loop-agent-tooltip ${tooltipSide} ${tooltipVertical} nodrag nopan`}>
         <header>
           <img src={celestial.asset} alt="" />
-          <div><strong>{agent.name}</strong><span>Node {order} · {celestial.label} · {statusLabels[agent.status]}</span></div>
+          <div><strong>{agent.name}</strong><span>Node {order} · {agent.kind} · {celestial.label} · {statusLabels[agent.status]}</span></div>
           {data.onOpenThread ? (
             <button
               className="loop-node-open"

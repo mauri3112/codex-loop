@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
-import { CircleStop, MessageSquareMore, MoreHorizontal, Pause, Play, RotateCcw, Save, Sparkles } from "lucide-react";
+import { CircleStop, MessageSquareMore, MoreHorizontal, Pause, Pencil, Play, RotateCcw, Save, Sparkles } from "lucide-react";
 import { api, type CreateInterventionInput, type RespondToAttentionInput } from "./api/client";
 import { ActivityPanel } from "./components/activity/ActivityPanel";
 import { LoopWorkspaceCanvas } from "./components/canvas";
 import { LoopLanding, type LoopTemplateItem } from "./components/landing/LoopLanding";
+import { LoopDesignerPanel } from "./components/designer/LoopDesignerPanel";
 import { AttentionBanner, InterventionDrawer } from "./components/intervention/InterventionCenter";
 import { RunControl } from "./components/run/RunControl";
 import { CodexShell, type ShellSection } from "./components/shell/CodexShell";
@@ -42,9 +43,13 @@ interface WorkspaceProps {
   onIntervene: (workflow: Workflow, input: CreateInterventionInput) => Promise<void>;
   onRespondToAttention: (workflow: Workflow, attentionId: string, input: RespondToAttentionInput) => Promise<void>;
   onOpenThread: (id: string) => void;
+  onDesignerMessage: (workflow: Workflow, message: string) => Promise<void>;
+  onUndo: (workflow: Workflow) => Promise<void>;
+  designerSending: boolean;
+  onGateDecision: (workflow: Workflow, nodeId: string, decision: "approve" | "decline") => Promise<void>;
 }
 
-function Workspace({ data, onChange, onSave, onRunAction, onConfigureRun, onIntervene, onRespondToAttention, onOpenThread }: WorkspaceProps) {
+function Workspace({ data, onChange, onSave, onRunAction, onConfigureRun, onIntervene, onRespondToAttention, onOpenThread, onDesignerMessage, onUndo, designerSending, onGateDecision }: WorkspaceProps) {
   const { workflowId = "" } = useParams();
   const navigate = useNavigate();
   const workflow = data.workflows.find((item) => item.id === workflowId);
@@ -53,6 +58,8 @@ function Workspace({ data, onChange, onSave, onRunAction, onConfigureRun, onInte
   const [saving, setSaving] = useState(false);
   const [interventionOpen, setInterventionOpen] = useState(false);
   const [initialAttentionId, setInitialAttentionId] = useState<string>();
+  const [editMode, setEditMode] = useState(false);
+  const [mobilePane, setMobilePane] = useState<"chat" | "preview">("chat");
   if (!workflow) return <main className="workflow-missing"><h1>Workflow not found</h1><button onClick={() => navigate("/loop")}>Return to Loop</button></main>;
 
   const run = workflow.runs.at(-1);
@@ -69,17 +76,20 @@ function Workspace({ data, onChange, onSave, onRunAction, onConfigureRun, onInte
         <div className="workspace-identity"><h1>{workflow.name}</h1><span className={`workflow-state state-${workflow.status}`}>{workflow.status}</span></div>
         <div className="workspace-progress" aria-label={`${progress}% workflow progress`}><span><i style={{ width: `${progress}%` }} /></span><small>{completed}/{workflow.nodes.length} complete</small></div>
         <div className="workspace-controls">
-          {!run || ["stopped", "completed"].includes(run.status) ? <RunControl configuration={workflow.runConfiguration} onStart={() => runAction("start")} onSave={(configuration) => onConfigureRun(workflow, configuration)} /> : run.status === "paused" ? <button className="run-primary" onClick={() => void runAction("resume")}><Play size={14} /> Resume</button> : <button onClick={() => void runAction("pause")}><Pause size={14} /> Pause</button>}
+          {!run || ["stopped", "completed"].includes(run.status) ? <RunControl configuration={workflow.runConfiguration} onStart={() => runAction("start")} onSave={(configuration) => onConfigureRun(workflow, configuration)} disabled={workflow.lifecycle !== "published"} /> : run.status === "paused" ? <button className="run-primary" onClick={() => void runAction("resume")}><Play size={14} /> Resume</button> : <button onClick={() => void runAction("pause")}><Pause size={14} /> Pause</button>}
           {run && ["running", "paused"].includes(run.status) && <button onClick={() => void runAction("stop")} title="Stop workflow"><CircleStop size={14} /><span>Stop</span></button>}
           <button className={openAttentionRequests.length > 0 ? "intervene-control has-attention" : "intervene-control"} onClick={() => { setInitialAttentionId(undefined); setInterventionOpen(true); }} title="Intervene in this run"><MessageSquareMore size={14} /><span>Intervene</span>{openAttentionRequests.length > 0 ? <i>{openAttentionRequests.length}</i> : null}</button>
           <button onClick={() => void runAction("reset")} title="Reset workflow"><RotateCcw size={14} /><span>Reset</span></button>
-          <Button variant="secondary" onClick={save} loading={saving}><Save size={14} />{workflow.saved ? "Saved" : "Save"}</Button>
+          <button onClick={() => setEditMode((value) => !value)} title={editMode ? "Return to Designer" : "Edit graph visually"}><Pencil size={14} /><span>{editMode ? "Done editing" : "Edit visually"}</span></button>
+          <Button variant="secondary" onClick={save} loading={saving}><Save size={14} />{workflow.lifecycle === "published" ? "Published" : "Publish"}</Button>
         </div>
       </header>
       <AttentionBanner requests={openAttentionRequests} onOpen={(attentionId) => { setInitialAttentionId(attentionId); setInterventionOpen(true); }} />
-      <div className="workspace-content">
-        <LoopWorkspaceCanvas workflow={workflow} selection={selection} onSelectionChange={setSelection} onWorkflowChange={onChange} onOpenThread={onOpenThread} />
-        <ActivityPanel
+      <div className={`workspace-content${editMode ? " is-visual-edit" : " is-designer"}`}>
+        {!editMode ? <div className="workspace-mobile-tabs" role="tablist" aria-label="Loop workspace view"><button type="button" role="tab" aria-selected={mobilePane === "chat"} onClick={() => setMobilePane("chat")}>Chat</button><button type="button" role="tab" aria-selected={mobilePane === "preview"} onClick={() => setMobilePane("preview")}>Preview</button></div> : null}
+        {!editMode ? <div className={`workspace-designer-pane${mobilePane === "chat" ? " is-mobile-active" : ""}`}><LoopDesignerPanel workflow={workflow} sending={designerSending} onSend={(message) => onDesignerMessage(workflow, message)} onUndo={() => onUndo(workflow)} /></div> : null}
+        <div className={`workspace-canvas-pane${editMode || mobilePane === "preview" ? " is-mobile-active" : ""}`}><LoopWorkspaceCanvas workflow={workflow} selection={selection} onSelectionChange={setSelection} onWorkflowChange={onChange} onOpenThread={onOpenThread} readOnly={!editMode} /></div>
+        {editMode ? <ActivityPanel
           events={workflow.events}
           contexts={workflow.contextBlocks}
           agents={workflow.nodes}
@@ -87,7 +97,7 @@ function Workspace({ data, onChange, onSave, onRunAction, onConfigureRun, onInte
           onToggle={() => setActivityOpen((value) => !value)}
           onSelectNode={selectFromActivity}
           onSelectContext={(id) => setSelection({ type: "context", id })}
-        />
+        /> : null}
       </div>
       <InterventionDrawer
         workflow={workflow}
@@ -96,6 +106,7 @@ function Workspace({ data, onChange, onSave, onRunAction, onConfigureRun, onInte
         onClose={() => setInterventionOpen(false)}
         onIntervene={(input) => onIntervene(workflow, input)}
         onRespond={(attentionId, input) => onRespondToAttention(workflow, attentionId, input)}
+        onGateDecision={(nodeId, decision) => onGateDecision(workflow, nodeId, decision)}
       />
     </main>
   );
@@ -105,6 +116,7 @@ export function App() {
   const [data, setData] = useState<AppData | null>(null);
   const [error, setError] = useState("");
   const [generating, setGenerating] = useState(false);
+  const [designerSendingId, setDesignerSendingId] = useState<string>();
   const navigate = useNavigate();
   const location = useLocation();
   const persistQueue = useRef<Promise<unknown>>(Promise.resolve());
@@ -134,12 +146,24 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [hasLiveCodexWork, refresh]);
 
+  const sendDesignerMessage = async (workflow: Workflow, message: string) => {
+    setDesignerSendingId(workflow.id);
+    const optimisticMessage = { id: `optimistic-${Date.now()}`, role: "user" as const, content: message, timestamp: new Date().toISOString(), status: "complete" as const };
+    setData((current) => current ? { ...current, workflows: current.workflows.map((item) => item.id === workflow.id ? { ...item, designer: { ...item.designer, state: "running", messages: [...item.designer.messages, optimisticMessage] } } : item) } : current);
+    try { replaceWorkflow(await api.sendDesignerMessage(workflow.id, message)); }
+    catch (reason) { await refresh(); setError(reason instanceof Error ? reason.message : "Loop Designer could not update the graph"); throw reason; }
+    finally { setDesignerSendingId(undefined); }
+  };
+  const undo = async (workflow: Workflow) => {
+    try { replaceWorkflow(await api.undo(workflow.id)); } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not undo the last Loop change"); }
+  };
   const generate = async (task: string) => {
     setGenerating(true);
     try {
-      const workflow = await api.generate(task);
+      const workflow = await api.create();
       setData((current) => current ? { ...current, workflows: [workflow, ...current.workflows] } : current);
       navigate(`/loop/${workflow.id}`);
+      await sendDesignerMessage(workflow, task);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Could not generate workflow"); } finally { setGenerating(false); }
   };
   const create = async () => {
@@ -169,6 +193,9 @@ export function App() {
   };
   const respondToAttention = async (workflow: Workflow, attentionId: string, input: RespondToAttentionInput) => {
     replaceWorkflow(await api.respondToAttention(workflow.id, attentionId, input));
+  };
+  const gateDecision = async (workflow: Workflow, nodeId: string, decision: "approve" | "decline") => {
+    replaceWorkflow(await api.resolveGate(workflow.id, nodeId, decision));
   };
   const sendInstruction = async (workflowId: string, threadId: string, instruction: string) => {
     replaceWorkflow(await api.sendInstruction(workflowId, threadId, instruction));
@@ -204,8 +231,8 @@ export function App() {
       {error && <div className="app-toast" role="alert">{error}<button onClick={() => setError("")}>×</button></div>}
       <Routes>
         <Route path="/" element={<Navigate to="/loop" replace />} />
-        <Route path="/loop" element={data.workflows.length > 0 ? <Navigate to={`/loop/${data.workflows[0].id}`} replace /> : <LoopLanding generating={generating} recentWorkflows={[]} savedWorkflows={[]} templates={data.templates} onCreate={() => void create()} onGenerate={(task) => void generate(task)} onOpenWorkflow={(id) => navigate(`/loop/${id}`)} onUseTemplate={(template: LoopTemplateItem) => void generate(template.title)} />} />
-        <Route path="/loop/:workflowId" element={<Workspace data={data} onChange={changeWorkflow} onSave={save} onRunAction={runAction} onConfigureRun={configureRun} onIntervene={intervene} onRespondToAttention={respondToAttention} onOpenThread={(id) => navigate(`/threads/${id}`)} />} />
+        <Route path="/loop" element={<LoopLanding generating={generating} recentWorkflows={data.workflows.filter((workflow) => workflow.lifecycle === "draft").map((workflow) => ({ id: workflow.id, name: workflow.name, description: workflow.mainTask, status: workflow.status, updatedLabel: new Date(workflow.updatedAt).toLocaleDateString(), nodeCount: workflow.nodes.length }))} savedWorkflows={data.workflows.filter((workflow) => workflow.lifecycle === "published").map((workflow) => ({ id: workflow.id, name: workflow.name, description: workflow.mainTask, status: workflow.status, updatedLabel: new Date(workflow.updatedAt).toLocaleDateString(), nodeCount: workflow.nodes.length }))} templates={data.templates} onCreate={() => void create()} onGenerate={(task) => void generate(task)} onOpenWorkflow={(id) => navigate(`/loop/${id}`)} onUseTemplate={(template: LoopTemplateItem) => void generate(`${template.title}. ${template.description}`)} />} />
+        <Route path="/loop/:workflowId" element={<Workspace data={data} onChange={changeWorkflow} onSave={save} onRunAction={runAction} onConfigureRun={configureRun} onIntervene={intervene} onRespondToAttention={respondToAttention} onOpenThread={(id) => navigate(`/threads/${id}`)} onDesignerMessage={sendDesignerMessage} onUndo={undo} designerSending={designerSendingId === activeWorkflow?.id} onGateDecision={gateDecision} />} />
         <Route path="/threads/:threadId" element={<ThreadRoute data={data} onSend={sendInstruction} onStop={stopThread} onResolveApproval={resolveApproval} />} />
         <Route path="/threads" element={<StaticCodexScreen section="threads" />} />
         <Route path="/scheduled" element={<StaticCodexScreen section="scheduled" />} />

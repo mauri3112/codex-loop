@@ -17,6 +17,7 @@ interface InterventionDrawerProps {
   onClose: () => void;
   onIntervene: (input: CreateInterventionInput) => Promise<void>;
   onRespond: (attentionId: string, input: RespondToAttentionInput) => Promise<void>;
+  onGateDecision: (nodeId: string, decision: "approve" | "decline") => Promise<void>;
 }
 
 type DrawerView = "attention" | "intervene";
@@ -35,6 +36,7 @@ const deliveryOptions: Array<{
 
 function requestSummary(request: AttentionRequest) {
   if (request.kind === "user-input") return "Codex needs your answer before this branch can continue.";
+  if (request.kind === "approval-gate") return "The Loop is waiting for explicit approval before continuing.";
   if (request.kind === "suspected-stall") return "This branch has not reported meaningful progress recently.";
   if (request.kind === "deadlock") return "No active or launchable agent can move this run forward.";
   if (request.kind === "retry-exhausted") return "An agent used all configured retry attempts.";
@@ -109,7 +111,7 @@ function QuestionField({ question, answer, onChange }: {
   );
 }
 
-export function InterventionDrawer({ workflow, open, initialAttentionId, onClose, onIntervene, onRespond }: InterventionDrawerProps) {
+export function InterventionDrawer({ workflow, open, initialAttentionId, onClose, onIntervene, onRespond, onGateDecision }: InterventionDrawerProps) {
   const openRequests = useMemo(() => workflow.attentionRequests.filter((request) => request.status === "open"), [workflow.attentionRequests]);
   const [view, setView] = useState<DrawerView>(openRequests.length > 0 ? "attention" : "intervene");
   const [attentionId, setAttentionId] = useState(initialAttentionId ?? openRequests[0]?.id ?? "");
@@ -234,6 +236,15 @@ export function InterventionDrawer({ workflow, open, initialAttentionId, onClose
     }
   };
 
+  const submitGate = async (decision: "approve" | "decline") => {
+    if (!selectedRequest?.nodeId) return;
+    setSubmitting(true);
+    setError("");
+    try { await onGateDecision(selectedRequest.nodeId, decision); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Could not resolve approval gate"); }
+    finally { setSubmitting(false); }
+  };
+
   return (
     <div className="intervention-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !submitting) onClose(); }}>
       <aside ref={drawerRef} className="intervention-drawer" role="dialog" aria-modal="true" aria-labelledby="intervention-title">
@@ -261,9 +272,9 @@ export function InterventionDrawer({ workflow, open, initialAttentionId, onClose
               </div>
               {questions.length > 0 ? questions.map((question) => (
                 <QuestionField key={question.id} question={question} answer={answers[question.id] ?? { value: "", other: "" }} onChange={(answer) => setAnswers((current) => ({ ...current, [question.id]: answer }))} />
-              )) : <p className="intervention-empty">This request has no structured questions. Use Intervene to send guidance.</p>}
+              )) : selectedRequest.kind === "approval-gate" ? <p className="intervention-empty">Approving allows the downstream branch to start. Declining pauses the Loop without rolling back completed work.</p> : <p className="intervention-empty">This request has no structured questions. Use Intervene to send guidance.</p>}
               {error ? <p className="intervention-error" role="alert">{error}</p> : null}
-              <footer><Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" variant="primary" loading={submitting} disabled={questions.length === 0 || !validAnswers}><Send size={14} /> Send answer</Button></footer>
+              {selectedRequest.kind === "approval-gate" ? <footer><Button type="button" variant="ghost" onClick={() => void submitGate("decline")} disabled={submitting}>Decline and pause</Button><Button type="button" variant="primary" loading={submitting} onClick={() => void submitGate("approve")}><Send size={14} /> Approve</Button></footer> : <footer><Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>Cancel</Button><Button type="submit" variant="primary" loading={submitting} disabled={questions.length === 0 || !validAnswers}><Send size={14} /> Send answer</Button></footer>}
             </form>
           ) : view === "attention" ? (
             <div className="intervention-empty-state"><AlertTriangle size={20} /><h3>No open requests</h3><p>The loop no longer needs an answer.</p><Button onClick={() => setView("intervene")}>Send guidance</Button></div>

@@ -3,9 +3,9 @@ import type { TaskCapability } from "../../domain/task-capabilities";
 import { applyTaskCapability, filterTaskCapabilities, findSlashQuery } from "./slash-autocomplete";
 
 const items: TaskCapability[] = [
-  { id: "skill:pdf", kind: "skill", label: "pdf", description: "Work with PDFs", invocation: "$pdf " },
-  { id: "computer-use", kind: "computer-use", label: "Computer use", description: "Control local apps", invocation: "$computer-use " },
-  { id: "mcp:github", kind: "mcp", label: "GitHub", description: "12 MCP tools", invocation: "Use the GitHub MCP server to " },
+  { id: "skill:pdf", kind: "skill", label: "pdf", description: "Work with PDFs", invocation: "$pdf ", available: true },
+  { id: "computer-use", kind: "computer-use", label: "Computer use", description: "Control local apps", invocation: "$computer-use ", available: true },
+  { id: "mcp:github", kind: "mcp", label: "GitHub", description: "12 MCP tools", invocation: "Use the GitHub MCP server to ", available: true },
 ];
 
 describe("slash task autocomplete", () => {

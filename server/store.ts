@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { AppData, Workflow } from "../src/domain/types.js";
+import { applyWorkflowDefinition, createWorkflowMutation, validateWorkflowDefinition, workflowDefinition } from "../src/domain/definition.js";
+import type { AppData, Workflow, WorkflowDefinition, WorkflowMutation } from "../src/domain/types.js";
 import { normalizeWorkflow } from "../src/domain/normalize.js";
 import { createInitialData } from "../src/data/seed.js";
 
@@ -8,6 +9,20 @@ export class WorkflowNotFoundError extends Error {
   constructor(id: string) {
     super(`Workflow ${id} was not found`);
     this.name = "WorkflowNotFoundError";
+  }
+}
+
+export class WorkflowRevisionConflictError extends Error {
+  constructor(expected: number, actual: number) {
+    super(`Workflow revision conflict: expected ${expected}, current revision is ${actual}`);
+    this.name = "WorkflowRevisionConflictError";
+  }
+}
+
+export class WorkflowValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkflowValidationError";
   }
 }
 
@@ -86,9 +101,54 @@ export class JsonWorkflowStore {
       const current = data.workflows[index];
       const incoming = structuredClone(workflow);
       const merged = ["running", "paused"].includes(current.status) ? preserveActiveRuntime(current, incoming) : incoming;
-      const updated = normalizeWorkflow({ ...merged, id, updatedAt: new Date().toISOString() });
+      const definition = workflowDefinition(normalizeWorkflow(merged));
+      const before = workflowDefinition(current);
+      if (JSON.stringify(before) === JSON.stringify(definition)) return structuredClone(current);
+      const mutation = createWorkflowMutation(current, definition, { baseRevision: current.revision, actor: "user", rationale: "Updated in visual editor" });
+      applyWorkflowDefinition(merged, definition);
+      const updated = normalizeWorkflow({ ...merged, id, revision: mutation.revision, lifecycle: "draft", saved: false, mutations: [...current.mutations, mutation], updatedAt: new Date().toISOString() });
       data.workflows[index] = updated;
       return structuredClone(updated);
+    });
+  }
+
+  async applyDefinitionMutation(
+    id: string,
+    definition: WorkflowDefinition,
+    input: { baseRevision: number; actor: WorkflowMutation["actor"]; rationale: string; undoneMutationId?: string },
+  ): Promise<Workflow> {
+    return this.mutate((data) => {
+      const index = data.workflows.findIndex((item) => item.id === id);
+      if (index < 0) throw new WorkflowNotFoundError(id);
+      const current = data.workflows[index];
+      if (current.revision !== input.baseRevision) throw new WorkflowRevisionConflictError(input.baseRevision, current.revision);
+      if (["running", "paused"].includes(current.status)) throw new WorkflowValidationError("Create a new draft revision before changing a running Loop");
+      const mutation = createWorkflowMutation(current, definition, input);
+      const next = structuredClone(current);
+      applyWorkflowDefinition(next, mutation.after);
+      next.revision = mutation.revision;
+      next.lifecycle = "draft";
+      next.saved = false;
+      next.mutations.push(mutation);
+      next.validationIssues = validateWorkflowDefinition(mutation.after);
+      next.updatedAt = new Date().toISOString();
+      const updated = normalizeWorkflow(next);
+      data.workflows[index] = updated;
+      return structuredClone(updated);
+    });
+  }
+
+  async undoWorkflowMutation(id: string, mutationId?: string): Promise<Workflow> {
+    const current = await this.getWorkflow(id);
+    const mutation = mutationId
+      ? current.mutations.find((candidate) => candidate.id === mutationId)
+      : [...current.mutations].reverse().find((candidate) => !current.mutations.some((later) => later.undoneMutationId === candidate.id));
+    if (!mutation) throw new WorkflowValidationError("There is no Loop change to undo");
+    return this.applyDefinitionMutation(id, mutation.before, {
+      baseRevision: current.revision,
+      actor: "user",
+      rationale: `Undo: ${mutation.rationale}`,
+      undoneMutationId: mutation.id,
     });
   }
 
@@ -108,7 +168,12 @@ export class JsonWorkflowStore {
     return this.mutate((data) => {
       const workflow = data.workflows.find((item) => item.id === id);
       if (!workflow) throw new WorkflowNotFoundError(id);
+      const issues = validateWorkflowDefinition(workflowDefinition(workflow));
+      workflow.validationIssues = issues;
+      if (issues.some((issue) => issue.severity === "error")) throw new WorkflowValidationError("Resolve Loop validation errors before publishing");
       workflow.saved = true;
+      workflow.lifecycle = "published";
+      if (workflow.status === "draft") workflow.status = "ready";
       workflow.updatedAt = new Date().toISOString();
       return structuredClone(workflow);
     });

@@ -1,0 +1,26 @@
+{
+  "name": "codex-loop",
+  "version": "0.1.0",
+  "description": "Design, validate, publish, and safely operate versioned Codex Loops from any Codex task.",
+  "author": {
+    "name": "mauri3112"
+  },
+  "homepage": "https://github.com/mauri3112/codex-loop",
+  "repository": "https://github.com/mauri3112/codex-loop",
+  "license": "MIT",
+  "keywords": ["agents", "codex", "orchestration", "workflows"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Loop",
+    "shortDescription": "Design and operate verified Codex Loops.",
+    "longDescription": "Create and refine versioned multi-agent Loops conversationally, discover authenticated capabilities without exposing credentials, and inspect or control runs through explicit safety boundaries.",
+    "developerName": "mauri3112",
+    "category": "Productivity",
+    "capabilities": ["Skills", "MCP"],
+    "defaultPrompt": [
+      "Use $design-loop to create a verified Loop for this task.",
+      "Use $operate-loop to inspect this Loop's current run."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

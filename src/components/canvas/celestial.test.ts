@@ -21,6 +21,7 @@ const agent = (patch: Partial<AgentNode>): AgentNode => ({
   position: { x: 0, y: 0 },
   size: { width: 116, height: 124 },
   ...patch,
+  kind: patch.kind ?? "agent",
 });
 
 describe("celestial agent visuals", () => {

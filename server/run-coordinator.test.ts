@@ -15,7 +15,7 @@ describe("scheduled workflow runs", () => {
   });
 
   it("matches configured local days and times without firing twice in the same minute", () => {
-    const workflow = createGeneratedWorkflow("Run on a schedule");
+    const workflow = createGeneratedWorkflow("Run on a schedule", { saved: true });
     workflow.runConfiguration = {
       ...workflow.runConfiguration,
       mode: "scheduled",
@@ -30,7 +30,7 @@ describe("scheduled workflow runs", () => {
   it("starts due workflows through the shared bridge with schedule provenance", async () => {
     directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-schedule-"));
     const store = new JsonWorkflowStore(path.join(directory, "data.json"));
-    const workflow = createGeneratedWorkflow("Run through the coordinator");
+    const workflow = createGeneratedWorkflow("Run through the coordinator", { saved: true });
     workflow.runConfiguration = {
       ...workflow.runConfiguration,
       mode: "scheduled",

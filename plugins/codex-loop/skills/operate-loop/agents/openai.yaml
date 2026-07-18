@@ -1,0 +1,4 @@
+interface:
+  display_name: "Operate Loop"
+  short_description: "Inspect and safely control Codex Loop runs."
+  default_prompt: "Use $operate-loop to inspect or control this Codex Loop run safely."

@@ -70,7 +70,7 @@ interface GeneratedWorkflowOptions {
 function makeAgent(
   workflowId: string,
   key: string,
-  input: Omit<AgentNode, "id" | "threadId" | "status" | "attempt" | "progress">,
+  input: Omit<AgentNode, "id" | "threadId" | "status" | "attempt" | "progress" | "kind"> & { kind?: AgentNode["kind"] },
 ): AgentNode {
   return {
     ...input,
@@ -79,6 +79,7 @@ function makeAgent(
     status: "idle",
     attempt: 0,
     progress: 0,
+    kind: input.kind ?? "agent",
   };
 }
 
@@ -222,15 +223,21 @@ export function createGeneratedWorkflow(task: string, options: GeneratedWorkflow
   ];
 
   return {
+    schemaVersion: 2,
     id: workflowId,
+    revision: 0,
+    lifecycle: options.saved ? "published" : "draft",
     name: options.name ?? "Repository change loop",
     mainTask: normalizedTask,
     defaultModel: "Terra",
     executionMode: "automatic",
     sharedConnectors: ["GitHub", "Terminal", "Browser"],
-    environmentVariables: [],
+    configurationValues: [],
+    capabilityBindings: [],
+    secretRequirements: [],
     approvalPolicy: "on-risk",
     maximumRetries: 3,
+    budgets: { maximumConcurrentAgents: 4, maximumTotalAgents: 32, maximumIterations: 12, maximumWallClockMinutes: 120, maximumNoProgressRounds: 2 },
     executionBackend: "codex",
     runConfiguration: defaultRunConfiguration(),
     status: "ready",
@@ -260,6 +267,9 @@ export function createGeneratedWorkflow(task: string, options: GeneratedWorkflow
     events: [],
     attentionRequests: [],
     interventions: [],
+    designer: { modelRole: "planner", configuredModel: "gpt-5.6-sol", state: "idle", messages: [], assumptions: [], pendingQuestions: [] },
+    mutations: [],
+    validationIssues: [],
     viewport: { x: 18, y: 52, zoom: 0.78 },
     createdAt,
     updatedAt: createdAt,
@@ -269,15 +279,21 @@ export function createGeneratedWorkflow(task: string, options: GeneratedWorkflow
 export function createBlankWorkflow(): Workflow {
   const now = isoNow();
   return {
+    schemaVersion: 2,
     id: makeId("loop"),
+    revision: 0,
+    lifecycle: "draft",
     name: "Untitled Loop",
     mainTask: "",
     defaultModel: "Terra",
     executionMode: "automatic",
     sharedConnectors: [],
-    environmentVariables: [],
+    configurationValues: [],
+    capabilityBindings: [],
+    secretRequirements: [],
     approvalPolicy: "on-risk",
     maximumRetries: 2,
+    budgets: { maximumConcurrentAgents: 4, maximumTotalAgents: 32, maximumIterations: 12, maximumWallClockMinutes: 120, maximumNoProgressRounds: 2 },
     executionBackend: "codex",
     runConfiguration: defaultRunConfiguration(),
     status: "draft",
@@ -291,6 +307,9 @@ export function createBlankWorkflow(): Workflow {
     events: [],
     attentionRequests: [],
     interventions: [],
+    designer: { modelRole: "planner", configuredModel: "gpt-5.6-sol", state: "idle", messages: [], assumptions: [], pendingQuestions: [] },
+    mutations: [],
+    validationIssues: [],
     viewport: { x: 0, y: 0, zoom: 1 },
     createdAt: now,
     updatedAt: now,
