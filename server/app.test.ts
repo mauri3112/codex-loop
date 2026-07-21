@@ -44,6 +44,14 @@ describe("Codex Loop API and persistence", () => {
     expect(body).toEqual({ version: "development", revision: "unknown", builtAt: "unknown" });
   });
 
+  it("initializes one missing store safely under concurrent reads", async () => {
+    const concurrentPath = path.join(directory, "concurrent", "data.json");
+    const concurrentStore = new JsonWorkflowStore(concurrentPath);
+    const snapshots = await Promise.all(Array.from({ length: 24 }, () => concurrentStore.getData()));
+    expect(snapshots.every((snapshot) => snapshot.workflows.length === snapshots[0].workflows.length)).toBe(true);
+    expect((JSON.parse(await readFile(concurrentPath, "utf8")) as AppData).workflows).toHaveLength(snapshots[0].workflows.length);
+  });
+
   it("seeds templates, manual threads, and a complete five-agent workflow", async () => {
     const { response, body } = await json<AppData>("/api/data");
     expect(response.status).toBe(200);

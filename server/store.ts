@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { applyWorkflowDefinition, createWorkflowMutation, validateWorkflowDefinition, workflowDefinition } from "../src/domain/definition.js";
 import type { AppData, Workflow, WorkflowDefinition, WorkflowMutation } from "../src/domain/types.js";
@@ -57,9 +58,13 @@ export class JsonWorkflowStore {
 
   private async persist(data: AppData): Promise<void> {
     await mkdir(path.dirname(this.filePath), { recursive: true });
-    const temporaryPath = `${this.filePath}.tmp`;
-    await writeFile(temporaryPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-    await rename(temporaryPath, this.filePath);
+    const temporaryPath = `${this.filePath}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporaryPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+      await rename(temporaryPath, this.filePath);
+    } finally {
+      await rm(temporaryPath, { force: true });
+    }
   }
 
   private async mutate<T>(operation: (data: AppData) => T | Promise<T>): Promise<T> {
