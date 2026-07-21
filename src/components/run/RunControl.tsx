@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import { CalendarClock, Check, ChevronDown, Copy, Link2, Plus, RefreshCw, Trash2, X, Zap } from "lucide-react";
-import type { WebhookParameter, WorkflowRunConfiguration } from "../../domain/types";
+import type { SingleRunOptions, WebhookParameter, WorkflowRunConfiguration } from "../../domain/types";
 import "./run-control.css";
 
 interface RunControlProps {
   configuration: WorkflowRunConfiguration;
-  onStart: () => Promise<void>;
+  onStart: (options?: SingleRunOptions) => Promise<void>;
   onSave: (configuration: WorkflowRunConfiguration) => Promise<void>;
   disabled?: boolean;
 }
@@ -38,8 +38,9 @@ function newParameter(): WebhookParameter {
 export function RunControl({ configuration, onStart, onSave, disabled = false }: RunControlProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [dialog, setDialog] = useState<"scheduled" | "webhook" | null>(null);
+  const [dialog, setDialog] = useState<"single" | "scheduled" | "webhook" | null>(null);
   const [draft, setDraft] = useState(configuration);
+  const [singleRun, setSingleRun] = useState<SingleRunOptions>({});
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
@@ -64,30 +65,17 @@ export function RunControl({ configuration, onStart, onSave, disabled = false }:
     draft.webhook.parameters.filter((parameter) => parameter.key.trim()).map((parameter) => [parameter.key.trim(), parameter.defaultValue || "value"]),
   ), [draft.webhook.parameters]);
 
-  const openDialog = (mode: "scheduled" | "webhook") => {
+  const openDialog = (mode: "single" | "scheduled" | "webhook") => {
     setDraft(configuration);
+    if (mode === "single") setSingleRun({});
     setError("");
     setMenuOpen(false);
     setDialog(mode);
   };
 
-  const selectSingle = async () => {
-    setMenuOpen(false);
-    setPending(true);
-    setError("");
-    try {
-      if (configuration.mode !== "single") await onSave({ ...configuration, mode: "single" });
-      await onStart();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Could not start the loop");
-    } finally {
-      setPending(false);
-    }
-  };
-
   const primaryAction = () => {
     if (disabled) return;
-    if (configuration.mode === "single") void selectSingle();
+    if (configuration.mode === "single") openDialog("single");
     else openDialog(configuration.mode);
   };
 
@@ -100,6 +88,15 @@ export function RunControl({ configuration, onStart, onSave, disabled = false }:
     setPending(true);
     setError("");
     try {
+      if (dialog === "single") {
+        if (configuration.mode !== "single") await onSave({ ...configuration, mode: "single" });
+        await onStart({
+          ...(singleRun.additionalPrompt?.trim() ? { additionalPrompt: singleRun.additionalPrompt.trim() } : {}),
+          ...(singleRun.workingDirectory?.trim() ? { workingDirectory: singleRun.workingDirectory.trim() } : {}),
+        });
+        setDialog(null);
+        return;
+      }
       const next = dialog === "webhook"
         ? { ...draft, mode: "webhook" as const, webhook: { ...draft.webhook, parameters: draft.webhook.parameters.filter((parameter) => parameter.key.trim()).map((parameter) => ({ ...parameter, key: parameter.key.trim() })) } }
         : { ...draft, mode: "scheduled" as const };
@@ -134,7 +131,7 @@ export function RunControl({ configuration, onStart, onSave, disabled = false }:
         </div>
         {menuOpen ? (
           <div className="run-menu" role="menu" aria-label="Run options">
-            <button role="menuitem" onClick={() => void selectSingle()}>
+            <button role="menuitem" onClick={() => openDialog("single")}>
               <Zap size={15} /><span><strong>Single run</strong><small>Start this loop once, right now</small></span>
               {configuration.mode === "single" ? <Check className="run-menu__check" size={14} /> : null}
             </button>
@@ -153,12 +150,17 @@ export function RunControl({ configuration, onStart, onSave, disabled = false }:
         <div className="run-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !pending) setDialog(null); }}>
           <form className="run-dialog" role="dialog" aria-modal="true" aria-labelledby="run-dialog-title" onSubmit={(event) => void saveDialog(event)}>
             <header>
-              <div className="run-dialog__icon">{dialog === "scheduled" ? <CalendarClock size={18} /> : <Link2 size={18} />}</div>
-              <div><h2 id="run-dialog-title">{dialog === "scheduled" ? "Schedule this loop" : "Create a webhook trigger"}</h2><p>{dialog === "scheduled" ? "Choose when Codex Loop should start automatically." : "Call this endpoint to start the loop from another tool or service."}</p></div>
+              <div className="run-dialog__icon">{dialog === "single" ? <Zap size={18} /> : dialog === "scheduled" ? <CalendarClock size={18} /> : <Link2 size={18} />}</div>
+              <div><h2 id="run-dialog-title">{dialog === "single" ? "Run this loop once" : dialog === "scheduled" ? "Schedule this loop" : "Create a webhook trigger"}</h2><p>{dialog === "single" ? "Optionally add a one-time instruction or choose a different project folder." : dialog === "scheduled" ? "Choose when Codex Loop should start automatically." : "Call this endpoint to start the loop from another tool or service."}</p></div>
               <button type="button" className="run-dialog__close" aria-label="Close" onClick={() => setDialog(null)} disabled={pending}><X size={16} /></button>
             </header>
 
-            {dialog === "scheduled" ? (
+            {dialog === "single" ? (
+              <div className="run-dialog__body">
+                <label className="run-dialog__field"><span>Additional prompt <small>Optional</small></span><textarea autoFocus rows={5} value={singleRun.additionalPrompt ?? ""} onChange={(event) => setSingleRun((current) => ({ ...current, additionalPrompt: event.target.value }))} placeholder="Add context or instructions that apply only to this run…" /><small>This is included in every worker's assignment for this run.</small></label>
+                <label className="run-dialog__field"><span>Project folder <small>Optional</small></span><input value={singleRun.workingDirectory ?? ""} onChange={(event) => setSingleRun((current) => ({ ...current, workingDirectory: event.target.value }))} placeholder="/Users/you/Documents/projects/my-project" /><small>Leave blank to use the server's configured Loop workspace.</small></label>
+              </div>
+            ) : dialog === "scheduled" ? (
               <div className="run-dialog__body">
                 <fieldset>
                   <legend>Days of the week</legend>
@@ -204,7 +206,7 @@ export function RunControl({ configuration, onStart, onSave, disabled = false }:
             )}
 
             {error ? <p className="run-dialog__error" role="alert">{error}</p> : null}
-            <footer><button type="button" onClick={() => setDialog(null)} disabled={pending}>Cancel</button><button type="submit" className="run-dialog__save" disabled={pending}>{pending ? "Saving…" : dialog === "scheduled" ? "Save schedule" : "Activate webhook"}</button></footer>
+            <footer><button type="button" onClick={() => setDialog(null)} disabled={pending}>Cancel</button><button type="submit" className="run-dialog__save" disabled={pending}>{pending ? (dialog === "single" ? "Starting…" : "Saving…") : dialog === "single" ? "Run now" : dialog === "scheduled" ? "Save schedule" : "Activate webhook"}</button></footer>
           </form>
         </div>,
         document.body,

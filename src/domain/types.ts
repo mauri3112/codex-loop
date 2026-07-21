@@ -180,6 +180,8 @@ export interface WorkflowRun {
   step: number;
   source?: "manual" | "schedule" | "webhook";
   input?: Record<string, string | number | boolean | null>;
+  additionalPrompt?: string;
+  workingDirectory?: string;
   startedAt?: string;
   completedAt?: string;
   workflowRevision?: number;
@@ -191,6 +193,11 @@ export interface WorkflowRun {
   checkpoints?: WorkflowCheckpoint[];
   repositoryRevision?: string;
   parentRun?: { workflowId: string; nodeId: string };
+}
+
+export interface SingleRunOptions {
+  additionalPrompt?: string;
+  workingDirectory?: string;
 }
 
 export interface WorkflowCheckpoint {

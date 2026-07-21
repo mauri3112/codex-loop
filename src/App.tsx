@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
-import { CircleStop, MessageSquareMore, MoreHorizontal, Pause, Pencil, Play, RotateCcw, Save, Sparkles } from "lucide-react";
+import { CircleStop, LoaderCircle, MessageSquareMore, MoreHorizontal, Pause, Pencil, Play, RotateCcw, Save, Sparkles, Trash2 } from "lucide-react";
 import { api, type CreateInterventionInput, type RespondToAttentionInput } from "./api/client";
 import { ActivityPanel } from "./components/activity/ActivityPanel";
 import { LoopWorkspaceCanvas } from "./components/canvas";
@@ -11,7 +11,7 @@ import { RunControl } from "./components/run/RunControl";
 import { CodexShell, type ShellSection } from "./components/shell/CodexShell";
 import { AgentThreadView } from "./components/thread/AgentThreadView";
 import { Button } from "./components/ui/Button";
-import type { AppData, Selection, Workflow, WorkflowRunConfiguration } from "./domain/types";
+import type { AppData, Selection, SingleRunOptions, Workflow, WorkflowRunConfiguration } from "./domain/types";
 import "./styles/app.css";
 
 function sectionForPath(pathname: string): ShellSection {
@@ -38,7 +38,8 @@ interface WorkspaceProps {
   data: AppData;
   onChange: (workflow: Workflow) => void;
   onSave: (workflow: Workflow) => Promise<void>;
-  onRunAction: (workflow: Workflow, action: "start" | "pause" | "resume" | "stop" | "reset") => Promise<void>;
+  onRunAction: (workflow: Workflow, action: "start" | "pause" | "resume" | "stop" | "reset", options?: SingleRunOptions) => Promise<void>;
+  onDelete: (workflow: Workflow) => Promise<void>;
   onConfigureRun: (workflow: Workflow, configuration: WorkflowRunConfiguration) => Promise<void>;
   onIntervene: (workflow: Workflow, input: CreateInterventionInput) => Promise<void>;
   onRespondToAttention: (workflow: Workflow, attentionId: string, input: RespondToAttentionInput) => Promise<void>;
@@ -49,7 +50,7 @@ interface WorkspaceProps {
   onGateDecision: (workflow: Workflow, nodeId: string, decision: "approve" | "decline") => Promise<void>;
 }
 
-function Workspace({ data, onChange, onSave, onRunAction, onConfigureRun, onIntervene, onRespondToAttention, onOpenThread, onDesignerMessage, onUndo, designerSending, onGateDecision }: WorkspaceProps) {
+function Workspace({ data, onChange, onSave, onRunAction, onDelete, onConfigureRun, onIntervene, onRespondToAttention, onOpenThread, onDesignerMessage, onUndo, designerSending, onGateDecision }: WorkspaceProps) {
   const { workflowId = "" } = useParams();
   const navigate = useNavigate();
   const workflow = data.workflows.find((item) => item.id === workflowId);
@@ -60,27 +61,35 @@ function Workspace({ data, onChange, onSave, onRunAction, onConfigureRun, onInte
   const [initialAttentionId, setInitialAttentionId] = useState<string>();
   const [editMode, setEditMode] = useState(false);
   const [mobilePane, setMobilePane] = useState<"chat" | "preview">("chat");
+  const [deleting, setDeleting] = useState(false);
   if (!workflow) return <main className="workflow-missing"><h1>Workflow not found</h1><button onClick={() => navigate("/loop")}>Return to Loop</button></main>;
 
   const run = workflow.runs.at(-1);
   const completed = workflow.nodes.filter((node) => node.status === "completed").length;
   const progress = workflow.nodes.length ? Math.round(workflow.nodes.reduce((sum, node) => sum + node.progress, 0) / workflow.nodes.length) : 0;
   const openAttentionRequests = workflow.attentionRequests.filter((request) => request.status === "open");
-  const runAction = (action: "start" | "pause" | "resume" | "stop" | "reset") => onRunAction(workflow, action);
+  const runAction = (action: "start" | "pause" | "resume" | "stop" | "reset", options?: SingleRunOptions) => onRunAction(workflow, action, options);
   const save = async () => { setSaving(true); try { await onSave(workflow); } finally { setSaving(false); } };
   const selectFromActivity = (nodeId: string) => setSelection({ type: "agent", id: nodeId });
+  const activeAgents = workflow.threads.filter((thread) => ["starting", "running"].includes(thread.codex?.state ?? "")).length;
+  const deleteLoop = async () => {
+    if (!window.confirm(`Delete “${workflow.name}”? This removes the Loop definition and its run history. This cannot be undone.`)) return;
+    setDeleting(true);
+    try { await onDelete(workflow); } finally { setDeleting(false); }
+  };
 
   return (
     <main className="loop-workspace">
       <header className="workspace-header">
-        <div className="workspace-identity"><h1>{workflow.name}</h1><span className={`workflow-state state-${workflow.status}`}>{workflow.status}</span></div>
+        <div className="workspace-identity"><h1>{workflow.name}</h1>{workflow.status === "running" ? <span className="loop-runtime-pill"><LoaderCircle size={11} />Loop running{activeAgents ? ` · ${activeAgents} active` : ""}</span> : <span className={`workflow-state state-${workflow.status}`}>{workflow.status}</span>}</div>
         <div className="workspace-progress" aria-label={`${progress}% workflow progress`}><span><i style={{ width: `${progress}%` }} /></span><small>{completed}/{workflow.nodes.length} complete</small></div>
         <div className="workspace-controls">
-          {!run || ["stopped", "completed"].includes(run.status) ? <RunControl configuration={workflow.runConfiguration} onStart={() => runAction("start")} onSave={(configuration) => onConfigureRun(workflow, configuration)} disabled={workflow.lifecycle !== "published"} /> : run.status === "paused" ? <button className="run-primary" onClick={() => void runAction("resume")}><Play size={14} /> Resume</button> : <button onClick={() => void runAction("pause")}><Pause size={14} /> Pause</button>}
+          {!run || ["stopped", "completed"].includes(run.status) ? <RunControl configuration={workflow.runConfiguration} onStart={(options) => runAction("start", options)} onSave={(configuration) => onConfigureRun(workflow, configuration)} disabled={workflow.lifecycle !== "published"} /> : run.status === "paused" ? <button className="run-primary" onClick={() => void runAction("resume")}><Play size={14} /> Resume</button> : <button onClick={() => void runAction("pause")}><Pause size={14} /> Pause</button>}
           {run && ["running", "paused"].includes(run.status) && <button onClick={() => void runAction("stop")} title="Stop workflow"><CircleStop size={14} /><span>Stop</span></button>}
           <button className={openAttentionRequests.length > 0 ? "intervene-control has-attention" : "intervene-control"} onClick={() => { setInitialAttentionId(undefined); setInterventionOpen(true); }} title="Intervene in this run"><MessageSquareMore size={14} /><span>Intervene</span>{openAttentionRequests.length > 0 ? <i>{openAttentionRequests.length}</i> : null}</button>
           <button onClick={() => void runAction("reset")} title="Reset workflow"><RotateCcw size={14} /><span>Reset</span></button>
           <button onClick={() => setEditMode((value) => !value)} title={editMode ? "Return to Designer" : "Edit graph visually"}><Pencil size={14} /><span>{editMode ? "Done editing" : "Edit visually"}</span></button>
+          <button className="delete-loop-control" onClick={() => void deleteLoop()} disabled={deleting || ["running", "paused"].includes(workflow.status)} title={["running", "paused"].includes(workflow.status) ? "Stop this Loop before deleting it" : "Delete Loop"}><Trash2 size={14} /><span>{deleting ? "Deleting…" : "Delete"}</span></button>
           <Button variant="secondary" onClick={save} loading={saving}><Save size={14} />{workflow.lifecycle === "published" ? "Published" : "Publish"}</Button>
         </div>
       </header>
@@ -177,8 +186,18 @@ export function App() {
   const replaceWorkflow = (workflow: Workflow) => {
     setData((current) => current ? { ...current, workflows: current.workflows.map((item) => item.id === workflow.id ? workflow : item) } : current);
   };
-  const runAction = async (workflow: Workflow, action: "start" | "pause" | "resume" | "stop" | "reset") => {
-    try { replaceWorkflow(await api.runAction(workflow.id, action)); } catch (reason) { setError(reason instanceof Error ? reason.message : `Could not ${action} workflow`); }
+  const runAction = async (workflow: Workflow, action: "start" | "pause" | "resume" | "stop" | "reset", options?: SingleRunOptions) => {
+    try { replaceWorkflow(await api.runAction(workflow.id, action, options)); } catch (reason) { setError(reason instanceof Error ? reason.message : `Could not ${action} workflow`); throw reason; }
+  };
+  const deleteWorkflow = async (workflow: Workflow) => {
+    try {
+      await api.deleteWorkflow(workflow.id);
+      setData((current) => current ? { ...current, workflows: current.workflows.filter((item) => item.id !== workflow.id) } : current);
+      navigate("/loop");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not delete Loop");
+      throw reason;
+    }
   };
   const configureRun = async (workflow: Workflow, configuration: WorkflowRunConfiguration) => {
     try { replaceWorkflow(await api.configureRun(workflow.id, configuration)); }
@@ -217,13 +236,13 @@ export function App() {
     <CodexShell
       activeSection={activeSection}
       onNavigate={(section) => {
-        if (section === "loop") navigate(`/loop/${activeWorkflow?.id ?? data.workflows[0]?.id ?? ""}`);
+        if (section === "loop") navigate("/loop");
         else navigate(section === "threads" ? "/threads" : `/${section}`);
       }}
       currentWorkflowName={shellWorkflow?.name}
       workflowThreads={shellWorkflow?.nodes.map((node) => ({ id: node.threadId, title: node.task, nodeName: node.name, status: node.status, loopCreated: true, parentWorkflowName: shellWorkflow.name }))}
       previousRuns={shellWorkflow?.runs.map((run, index) => ({ id: run.id, label: `Run ${index + 1} · ${run.startedAt ? new Date(run.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Not started"}`, status: run.status === "idle" ? "ready" : run.status }))}
-      savedWorkflows={data.workflows.map((workflow) => ({ id: workflow.id, name: workflow.name, description: workflow.mainTask, status: workflow.status }))}
+      savedWorkflows={data.workflows.map((workflow) => ({ id: workflow.id, name: workflow.name, description: workflow.mainTask, status: workflow.status, projectPath: workflow.runs.at(-1)?.workingDirectory ?? workflow.threads.find((thread) => thread.codex?.cwd)?.codex?.cwd, activeAgentCount: workflow.threads.filter((thread) => ["starting", "running"].includes(thread.codex?.state ?? "")).length }))}
       manualThreads={data.manualThreads}
       onOpenWorkflow={(id) => navigate(`/loop/${id}`)}
       onOpenThread={(id) => data.workflows.some((workflow) => workflow.threads.some((thread) => thread.id === id)) ? navigate(`/threads/${id}`) : navigate("/threads")}
@@ -232,7 +251,7 @@ export function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/loop" replace />} />
         <Route path="/loop" element={<LoopLanding generating={generating} recentWorkflows={data.workflows.filter((workflow) => workflow.lifecycle === "draft").map((workflow) => ({ id: workflow.id, name: workflow.name, description: workflow.mainTask, status: workflow.status, updatedLabel: new Date(workflow.updatedAt).toLocaleDateString(), nodeCount: workflow.nodes.length }))} savedWorkflows={data.workflows.filter((workflow) => workflow.lifecycle === "published").map((workflow) => ({ id: workflow.id, name: workflow.name, description: workflow.mainTask, status: workflow.status, updatedLabel: new Date(workflow.updatedAt).toLocaleDateString(), nodeCount: workflow.nodes.length }))} templates={data.templates} onCreate={() => void create()} onGenerate={(task) => void generate(task)} onOpenWorkflow={(id) => navigate(`/loop/${id}`)} onUseTemplate={(template: LoopTemplateItem) => void generate(`${template.title}. ${template.description}`)} />} />
-        <Route path="/loop/:workflowId" element={<Workspace data={data} onChange={changeWorkflow} onSave={save} onRunAction={runAction} onConfigureRun={configureRun} onIntervene={intervene} onRespondToAttention={respondToAttention} onOpenThread={(id) => navigate(`/threads/${id}`)} onDesignerMessage={sendDesignerMessage} onUndo={undo} designerSending={designerSendingId === activeWorkflow?.id} onGateDecision={gateDecision} />} />
+        <Route path="/loop/:workflowId" element={<Workspace data={data} onChange={changeWorkflow} onSave={save} onRunAction={runAction} onDelete={deleteWorkflow} onConfigureRun={configureRun} onIntervene={intervene} onRespondToAttention={respondToAttention} onOpenThread={(id) => navigate(`/threads/${id}`)} onDesignerMessage={sendDesignerMessage} onUndo={undo} designerSending={designerSendingId === activeWorkflow?.id} onGateDecision={gateDecision} />} />
         <Route path="/threads/:threadId" element={<ThreadRoute data={data} onSend={sendInstruction} onStop={stopThread} onResolveApproval={resolveApproval} />} />
         <Route path="/threads" element={<StaticCodexScreen section="threads" />} />
         <Route path="/scheduled" element={<StaticCodexScreen section="scheduled" />} />

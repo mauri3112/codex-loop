@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -37,6 +37,29 @@ describe("Codex app-server bridge", () => {
     expect(completed.threads.every((thread) => thread.toolCalls.some((tool) => tool.output === "bridge-ok"))).toBe(true);
     expect(completed.threads.every((thread) => thread.finalOutput?.startsWith("Native result"))).toBe(true);
     expect(completed.events.some((event) => event.type === "workflow.completed")).toBe(true);
+  });
+
+  it("applies per-run prompt and working-directory overrides to native workers", async () => {
+    directory = await mkdtemp(path.join(os.tmpdir(), "codex-loop-run-options-"));
+    const store = new JsonWorkflowStore(path.join(directory, "data.json"));
+    const projectDirectory = path.join(directory, "project");
+    await mkdir(projectDirectory);
+    const workflow = await store.addWorkflow(createGeneratedWorkflow("Run with one-time context", { saved: true }));
+    bridge = new CodexBridge(store, new CodexAppServerClient({ command: process.execPath, args: [fixture] }));
+
+    await bridge.startWorkflow(workflow.id, {
+      source: "manual",
+      additionalPrompt: "Focus on the authentication edge case.",
+      workingDirectory: projectDirectory,
+    });
+    const completed = await waitFor(async () => {
+      const current = await store.getWorkflow(workflow.id);
+      return current.status === "completed" ? current : undefined;
+    });
+
+    expect(completed.runs.at(-1)?.additionalPrompt).toBe("Focus on the authentication edge case.");
+    expect(completed.runs.at(-1)?.workingDirectory).toBe(projectDirectory);
+    expect(completed.threads.every((thread) => thread.codex?.cwd === projectDirectory)).toBe(true);
   });
 
   it("refuses to execute an unpublished draft", async () => {

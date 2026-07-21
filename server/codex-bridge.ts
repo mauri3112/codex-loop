@@ -1,4 +1,5 @@
 import path from "node:path";
+import { statSync } from "node:fs";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
@@ -22,6 +23,7 @@ export interface CodexBridgeService {
   resumeWorkflow(workflowId: string): Promise<Workflow>;
   stopWorkflow(workflowId: string): Promise<Workflow>;
   resetWorkflow(workflowId: string): Promise<Workflow>;
+  deleteWorkflow?(workflowId: string): Promise<void>;
   sendInstruction(workflowId: string, threadId: string, instruction: string): Promise<Workflow>;
   stopThread(workflowId: string, threadId: string): Promise<Workflow>;
   resolveApproval(workflowId: string, threadId: string, decision: "accept" | "decline"): Promise<Workflow>;
@@ -71,6 +73,8 @@ export interface RunInvocation {
   source: "manual" | "schedule" | "webhook";
   input?: Record<string, string | number | boolean | null>;
   parentRun?: { workflowId: string; nodeId: string };
+  additionalPrompt?: string;
+  workingDirectory?: string;
 }
 
 interface SkillsListResponse {
@@ -238,8 +242,9 @@ export class CodexBridge implements CodexBridgeService {
   async startWorkflow(workflowId: string, invocation: RunInvocation = { source: "manual" }): Promise<Workflow> {
     const candidate = await this.store.getWorkflow(workflowId);
     if (candidate.lifecycle !== "published") throw new BridgeInputError("Publish this Loop revision before starting it");
+    const workingDirectory = resolveWorkingDirectory(invocation.workingDirectory);
     await this.connect();
-    const repositoryRevision = await currentRepositoryRevision();
+    const repositoryRevision = await currentRepositoryRevision(workingDirectory);
     const workflow = await this.store.mutateWorkflow(workflowId, (draft) => {
       if (["running", "paused"].includes(draft.status)) throw new Error("Workflow is already running");
       if (draft.lifecycle !== "published") throw new BridgeInputError("Publish this Loop revision before starting it");
@@ -261,6 +266,8 @@ export class CodexBridge implements CodexBridgeService {
         noProgressRounds: 0,
         checkpoints: [],
         parentRun: invocation.parentRun,
+        workingDirectory,
+        ...(invocation.additionalPrompt?.trim() ? { additionalPrompt: invocation.additionalPrompt.trim() } : {}),
         ...(invocation.input && Object.keys(invocation.input).length ? { input: invocation.input } : {}),
         startedAt: now(),
       };
@@ -292,7 +299,7 @@ export class CodexBridge implements CodexBridgeService {
         intervention.error = "Superseded by a new workflow run";
       }
       const sourceLabel = invocation.source === "schedule" ? "schedule" : invocation.source === "webhook" ? "webhook" : "Run control";
-      addEvent(draft, { kind: "workflow", type: "workflow.started", actor: invocation.source === "manual" ? "You" : "Codex Loop", message: `Workflow started by ${sourceLabel} through the Codex app-server bridge` });
+      addEvent(draft, { kind: "workflow", type: "workflow.started", actor: invocation.source === "manual" ? "You" : "Codex Loop", message: `Workflow started by ${sourceLabel} in ${workingDirectory}` });
     });
     void this.schedule(workflowId);
     return workflow;
@@ -356,6 +363,18 @@ export class CodexBridge implements CodexBridgeService {
 
   async resetWorkflow(workflowId: string): Promise<Workflow> {
     return this.withWorkflowOperation(workflowId, () => this.resetWorkflowUnlocked(workflowId));
+  }
+
+  async deleteWorkflow(workflowId: string): Promise<void> {
+    const workflow = await this.store.getWorkflow(workflowId);
+    if (["running", "paused"].includes(workflow.status)) throw new BridgeInputError("Stop this Loop before deleting it");
+    const nativeThreadIds = workflow.threads.flatMap((thread) => thread.codex?.threadId ? [thread.codex.threadId] : []);
+    if (nativeThreadIds.length) {
+      await this.connect();
+      await Promise.all(nativeThreadIds.map((threadId) => this.client.archiveThread(threadId).catch(() => undefined)));
+      for (const threadId of nativeThreadIds) this.nativeThreads.delete(threadId);
+    }
+    await this.store.deleteWorkflow(workflowId);
   }
 
   private async resetWorkflowUnlocked(workflowId: string): Promise<Workflow> {
@@ -799,11 +818,16 @@ export class CodexBridge implements CodexBridgeService {
       if (run) run.consumedAgents = (run.consumedAgents ?? 0) + 1;
       addEvent(draft, { kind: "workflow", type: "subworkflow.started", actor: target.name, message: `Started ${child.name} as a subworkflow`, nodeId: target.id });
     });
-    await this.startWorkflow(child.id, { source: "manual", parentRun: { workflowId: parent.id, nodeId: node.id } });
+    await this.startWorkflow(child.id, {
+      source: "manual",
+      parentRun: { workflowId: parent.id, nodeId: node.id },
+      workingDirectory: parent.runs.at(-1)?.workingDirectory,
+      additionalPrompt: parent.runs.at(-1)?.additionalPrompt,
+    });
   }
 
   private async ensureThread(workflow: Workflow, thread: ThreadRecord): Promise<{ threadId: string; model: string; cwd: string }> {
-    const cwd = path.resolve(process.env.CODEX_LOOP_WORKSPACE ?? process.cwd());
+    const cwd = resolveWorkingDirectory(workflow.runs.at(-1)?.workingDirectory);
     const existing = thread.codex?.threadId;
     if (existing) {
       this.nativeThreads.set(existing, { workflowId: workflow.id, threadId: thread.id });
@@ -1356,9 +1380,18 @@ function scrubbedCapabilityProbeEnvironment(): NodeJS.ProcessEnv {
   return Object.fromEntries(allowed.flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]]]));
 }
 
-async function currentRepositoryRevision(): Promise<string> {
+function resolveWorkingDirectory(requested?: string): string {
+  const cwd = path.resolve(requested?.trim() || process.env.CODEX_LOOP_WORKSPACE || process.cwd());
   try {
-    const cwd = path.resolve(process.env.CODEX_LOOP_WORKSPACE ?? process.cwd());
+    if (!statSync(cwd).isDirectory()) throw new Error("not a directory");
+  } catch {
+    throw new BridgeInputError(`Working directory does not exist or is not a folder: ${cwd}`);
+  }
+  return cwd;
+}
+
+async function currentRepositoryRevision(cwd: string): Promise<string> {
+  try {
     const result = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd, timeout: 5_000, env: scrubbedCapabilityProbeEnvironment() });
     return result.stdout.trim() || "workspace-current";
   } catch {
@@ -1371,6 +1404,8 @@ function checkpointCacheKey(workflow: Workflow, node: AgentNode, run: Workflow["
     workflowRevision: run.workflowRevision ?? workflow.revision,
     repositoryRevision: run.repositoryRevision ?? "workspace-current",
     input: run.input ?? {},
+    additionalPrompt: run.additionalPrompt ?? "",
+    workingDirectory: run.workingDirectory ?? "",
     node: {
       id: node.id, kind: node.kind, task: node.task, definitionOfDone: node.definitionOfDone,
       model: node.configuredModel, effort: node.reasoningEffort, connectors: node.connectors, orchestration: node.orchestration,
@@ -1425,6 +1460,7 @@ function buildNodePrompt(workflow: Workflow, node: AgentNode): string {
   const runInput = run?.input && Object.keys(run.input).length
     ? `Run input values (${run.source ?? "manual"}):\n${JSON.stringify(run.input, null, 2)}`
     : `Run source: ${run?.source ?? "manual"}`;
+  const runOverride = run?.additionalPrompt ? `Additional instruction for this run:\n${run.additionalPrompt}` : "";
   return [
     `Parent workflow: ${workflow.name}`,
     `Workflow objective: ${workflow.mainTask}`,
@@ -1438,6 +1474,7 @@ function buildNodePrompt(workflow: Workflow, node: AgentNode): string {
     node.kind === "loop" ? `Stop condition: ${node.orchestration?.stopCondition ?? node.definitionOfDone}. End with exactly \`LOOP_STATUS: done\` or \`LOOP_STATUS: continue\`.` : "",
     node.kind === "verify" ? `Verification rubric: ${node.orchestration?.verificationRubric ?? node.definitionOfDone}. Independently challenge upstream claims.` : "",
     runInput,
+    runOverride,
     "Shared context explicitly granted to you:",
     context,
     "Complete this task in the current repository. Use tools as needed, verify the result, and finish with a concise handoff summary for downstream nodes.",

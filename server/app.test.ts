@@ -105,6 +105,20 @@ describe("Codex Loop API and persistence", () => {
     expect(raw.workflows.some((workflow) => workflow.id === generated.body.id)).toBe(true);
   });
 
+  it("deletes stopped Loops and protects active runs", async () => {
+    const removable = await json<Workflow>("/api/workflows/generate", { method: "POST", body: JSON.stringify({ task: "Delete this Loop" }) });
+    const deleted = await json<{ deleted: true; id: string }>(`/api/workflows/${removable.body.id}`, { method: "DELETE" });
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true, id: removable.body.id });
+    expect((await json<{ error: string }>(`/api/workflows/${removable.body.id}`)).response.status).toBe(404);
+
+    const active = await json<Workflow>("/api/workflows/generate", { method: "POST", body: JSON.stringify({ task: "Keep the active Loop" }) });
+    await store.mutateWorkflow(active.body.id, (workflow) => { workflow.status = "running"; });
+    const rejected = await json<{ error: string }>(`/api/workflows/${active.body.id}`, { method: "DELETE" });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toContain("Stop this Loop");
+  });
+
   it("applies optimistic definition mutations and records undo as a new revision", async () => {
     const created = await json<Workflow>("/api/workflows/generate", { method: "POST", body: JSON.stringify({ task: "Version this Loop" }) });
     const definition = workflowDefinition(created.body);

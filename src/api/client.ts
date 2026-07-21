@@ -1,4 +1,4 @@
-import type { AppData, Workflow, WorkflowDefinition, WorkflowRunConfiguration, WorkflowValidationIssue } from "../domain/types";
+import type { AppData, SingleRunOptions, Workflow, WorkflowDefinition, WorkflowRunConfiguration, WorkflowValidationIssue } from "../domain/types";
 import type { TaskCapabilitiesResponse } from "../domain/task-capabilities";
 
 export interface CreateInterventionInput {
@@ -52,7 +52,8 @@ export const api = {
   bridgeStatus: () => request<BridgeStatus>("/api/bridge/status"),
   connectBridge: () => request<BridgeStatus>("/api/bridge/connect", { method: "POST", body: JSON.stringify({}) }),
   taskCapabilities: () => request<TaskCapabilitiesResponse>("/api/task-capabilities"),
-  runAction: (id: string, action: "start" | "pause" | "resume" | "stop" | "reset") => request<Workflow>(`/api/workflows/${id}/run/${action}`, { method: "POST", body: JSON.stringify({}) }),
+  runAction: (id: string, action: "start" | "pause" | "resume" | "stop" | "reset", options?: SingleRunOptions) => request<Workflow>(`/api/workflows/${id}/run/${action}`, { method: "POST", body: JSON.stringify(options ?? {}) }),
+  deleteWorkflow: (id: string) => request<{ deleted: true; id: string }>(`/api/workflows/${id}`, { method: "DELETE" }),
   configureRun: (id: string, runConfiguration: WorkflowRunConfiguration) => request<Workflow>(`/api/workflows/${id}/run-configuration`, { method: "PUT", body: JSON.stringify(runConfiguration) }),
   sendInstruction: (workflowId: string, threadId: string, instruction: string) => request<Workflow>(`/api/workflows/${workflowId}/threads/${threadId}/turn`, { method: "POST", body: JSON.stringify({ instruction }) }),
   stopThread: (workflowId: string, threadId: string) => request<Workflow>(`/api/workflows/${workflowId}/threads/${threadId}/stop`, { method: "POST", body: JSON.stringify({}) }),

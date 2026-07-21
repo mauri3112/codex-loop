@@ -1,5 +1,8 @@
-.activity-panel { border-top: 1px solid var(--border); background: var(--surface); flex: 0 0 auto; min-height: 39px; color: var(--text); }
-.activity-panel.open { height: 250px; }
+.activity-panel { position: relative; border-top: 1px solid var(--border); background: var(--surface); flex: 0 0 auto; min-height: 39px; color: var(--text); }
+.activity-panel.open { min-height: 160px; max-height: calc(100% - 140px); }
+.activity-resize-handle { position: absolute; z-index: 5; top: -5px; left: 0; width: 100%; height: 10px; display: grid; place-items: center; cursor: ns-resize; touch-action: none; }
+.activity-resize-handle span { width: 44px; height: 3px; border-radius: 3px; background: transparent; transition: background 120ms ease; }
+.activity-resize-handle:hover span, .activity-resize-handle:focus span { background: var(--accent); outline: 0; }
 .activity-header { height: 39px; display: grid; grid-template-columns: 1fr 1fr; align-items: center; padding: 0; border-bottom: 1px solid transparent; }
 .activity-panel.open .activity-header { border-bottom-color: var(--border); }
 .activity-header-half { min-width: 0; height: 100%; display: flex; align-items: center; padding: 0 8px 0 14px; }

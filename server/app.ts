@@ -16,6 +16,10 @@ const designerMessageSchema = z.object({ message: z.string().trim().min(1).max(1
 const approvalSchema = z.object({ decision: z.enum(["accept", "decline"]) });
 const gateDecisionSchema = z.object({ decision: z.enum(["approve", "decline"]) });
 const runActionSchema = z.enum(["start", "pause", "resume", "stop", "reset"]);
+const singleRunOptionsSchema = z.object({
+  additionalPrompt: z.string().trim().max(12_000).optional(),
+  workingDirectory: z.string().trim().max(4_096).optional(),
+});
 const runConfigurationSchema = z.object({
   mode: z.enum(["single", "scheduled", "webhook"]),
   schedule: z.object({
@@ -150,6 +154,16 @@ export function createApp(
     }),
   );
 
+  app.delete(
+    "/api/workflows/:id",
+    asyncRoute(async (request, response) => {
+      const workflowId = String(request.params.id);
+      if (bridge.deleteWorkflow) await bridge.deleteWorkflow(workflowId);
+      else await store.deleteWorkflow(workflowId);
+      response.json({ deleted: true, id: workflowId });
+    }),
+  );
+
   app.get(
     "/api/data",
     asyncRoute(async (_request, response) => {
@@ -259,8 +273,9 @@ export function createApp(
     asyncRoute(async (request, response) => {
       const action = runActionSchema.parse(request.params.action);
       const workflowId = String(request.params.id);
+      const manualOptions = singleRunOptionsSchema.parse(request.body ?? {});
       const handlers = {
-        start: () => bridge.startWorkflow(workflowId),
+        start: () => bridge.startWorkflow(workflowId, { source: "manual", ...manualOptions }),
         pause: () => bridge.pauseWorkflow(workflowId),
         resume: () => bridge.resumeWorkflow(workflowId),
         stop: () => bridge.stopWorkflow(workflowId),

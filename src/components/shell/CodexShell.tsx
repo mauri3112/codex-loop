@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -34,6 +34,8 @@ export interface ShellWorkflowItem {
   name: string;
   description?: string;
   status: WorkflowStatus;
+  projectPath?: string;
+  activeAgentCount?: number;
 }
 
 export interface ShellRunItem {
@@ -82,6 +84,14 @@ export function CodexShell({
   const [uncontrolledSidebarOpen, setUncontrolledSidebarOpen] = useState(false);
   const isSidebarOpen = sidebarOpen ?? uncontrolledSidebarOpen;
   const setSidebarOpen = onSidebarOpenChange ?? setUncontrolledSidebarOpen;
+  const projects = useMemo(() => {
+    const groups = new Map<string, ShellWorkflowItem[]>();
+    for (const workflow of savedWorkflows) {
+      const projectPath = workflow.projectPath || "Configured Loop workspace";
+      groups.set(projectPath, [...(groups.get(projectPath) ?? []), workflow]);
+    }
+    return [...groups].map(([projectPath, workflows]) => ({ projectPath, workflows }));
+  }, [savedWorkflows]);
 
   const navigate = (section: ShellSection) => {
     onNavigate(section);
@@ -123,9 +133,20 @@ export function CodexShell({
 
           <section className="codex-shell__section" aria-labelledby="projects-heading">
             <h2 id="projects-heading" className="codex-shell__section-label">Projects</h2>
-            <div className="codex-shell__folder">
-              <div className="codex-shell__folder-row"><FolderGit2 size={13} /><strong>codex_loop</strong><span>Local</span><i /></div>
-              <div className="codex-shell__folder-detail">Redesign node hover details</div>
+            <div className="codex-shell__list">
+              {projects.map(({ projectPath, workflows }) => {
+                const projectName = projectPath === "Configured Loop workspace" ? projectPath : projectPath.split(/[\\/]/).filter(Boolean).at(-1) ?? projectPath;
+                const running = workflows.some((workflow) => workflow.status === "running");
+                return <div className="codex-shell__folder codex-shell__project" key={projectPath} title={projectPath}>
+                  <div className="codex-shell__folder-row"><FolderGit2 size={13} /><strong>{projectName}</strong><span>{running ? "Running" : "Local"}</span>{running ? <i /> : null}</div>
+                  {workflows.map((workflow) => (
+                    <button type="button" className="codex-shell__project-task" key={workflow.id} onClick={() => onOpenWorkflow?.(workflow.id)}>
+                      <StatusIndicator status={workflow.status} />
+                      <span><strong>{workflow.name}</strong><small>{workflow.status === "running" ? `Loop running${workflow.activeAgentCount ? ` · ${workflow.activeAgentCount} active` : ""}` : workflow.description || "Loop"}</small></span>
+                    </button>
+                  ))}
+                </div>;
+              })}
             </div>
           </section>
 

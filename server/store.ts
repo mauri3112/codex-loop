@@ -94,6 +94,17 @@ export class JsonWorkflowStore {
     });
   }
 
+  async deleteWorkflow(id: string): Promise<void> {
+    await this.mutate((data) => {
+      const index = data.workflows.findIndex((item) => item.id === id);
+      if (index < 0) throw new WorkflowNotFoundError(id);
+      if (["running", "paused"].includes(data.workflows[index].status)) {
+        throw new WorkflowValidationError("Stop this Loop before deleting it");
+      }
+      data.workflows.splice(index, 1);
+    });
+  }
+
   async updateWorkflow(id: string, workflow: Workflow): Promise<Workflow> {
     return this.mutate((data) => {
       const index = data.workflows.findIndex((item) => item.id === id);
