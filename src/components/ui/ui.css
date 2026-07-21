@@ -16,7 +16,7 @@
 .ui-button > span { display: inline-flex; align-items: center; justify-content: center; gap: 7px; line-height: 1; }
 
 .ui-button--primary {
-  color: #fff;
+  color: #171922;
   background: var(--text);
   border-color: var(--text);
 }
