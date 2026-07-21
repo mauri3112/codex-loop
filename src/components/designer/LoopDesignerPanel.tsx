@@ -64,7 +64,18 @@ export function LoopDesignerPanel({ workflow, sending, onSend, onUndo }: {
       </div>
 
       <form className="loop-designer__composer" onSubmit={submit}>
-        <SlashAutocompleteTextArea value={message} onChange={setMessage} rows={3} placeholder="Create or update this Loop…" />
+        <SlashAutocompleteTextArea
+          value={message}
+          onChange={setMessage}
+          rows={3}
+          placeholder="Create or update this Loop…"
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }
+          }}
+        />
         <footer><span>Use / to add skills, apps, or MCP capabilities</span><button type="submit" disabled={!message.trim() || sending} aria-label="Send to Loop Designer"><Send size={14} /></button></footer>
       </form>
     </aside>

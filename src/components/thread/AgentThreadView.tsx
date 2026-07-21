@@ -65,7 +65,7 @@ export function AgentThreadView({ workflow, threadId, onBack, onSend, onStop, on
           </section>
           <div className="thread-composer-wrap">
             <div className="thread-composer">
-              <textarea aria-label="Add instructions" placeholder="Add instructions or answer a question…" value={instruction} onChange={(event) => setInstruction(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void addInstruction(); } }} />
+              <textarea aria-label="Add instructions" placeholder="Add instructions or answer a question…" value={instruction} onChange={(event) => setInstruction(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) { event.preventDefault(); void addInstruction(); } }} />
               <button onClick={() => void addInstruction()} disabled={!instruction.trim() || submitting} aria-label="Send instruction"><Send size={15} /></button>
             </div>
             {error ? <span className="thread-error">{error}</span> : <span>Instructions are sent to the native Codex thread.</span>}

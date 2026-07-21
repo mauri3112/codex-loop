@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { applyWorkflowDefinition, createWorkflowMutation, validateWorkflowDefinition, workflowDefinition } from "../src/domain/definition.js";
-import type { AppData, Workflow, WorkflowDefinition, WorkflowMutation } from "../src/domain/types.js";
-import { normalizeWorkflow } from "../src/domain/normalize.js";
+import type { AgentNode, AppData, Workflow, WorkflowDefinition, WorkflowMutation } from "../src/domain/types.js";
+import { createLoopSupervisor, normalizeWorkflow } from "../src/domain/normalize.js";
 import { createInitialData } from "../src/data/seed.js";
 
 export class WorkflowNotFoundError extends Error {
@@ -192,6 +192,42 @@ export class JsonWorkflowStore {
       if (workflow.status === "draft") workflow.status = "ready";
       workflow.updatedAt = new Date().toISOString();
       return structuredClone(workflow);
+    });
+  }
+
+  async addWorkflowThread(id: string, task: string): Promise<Workflow> {
+    const current = await this.getWorkflow(id);
+    if (["running", "paused"].includes(current.status)) throw new WorkflowValidationError("Stop this Loop before adding a thread");
+    const normalizedTask = task.trim();
+    if (!normalizedTask) throw new WorkflowValidationError("Describe what the new thread should do");
+    const key = randomUUID();
+    const definition = workflowDefinition(current);
+    const node: AgentNode = {
+      id: `${id}-thread-node-${key}`,
+      threadId: `${id}-thread-${key}`,
+      name: normalizedTask.length > 48 ? `${normalizedTask.slice(0, 47)}…` : normalizedTask,
+      role: "custom",
+      task: normalizedTask,
+      definitionOfDone: "Complete the requested task, verify the result, and report a concise handoff.",
+      configuredModel: "Terra",
+      effectiveModel: "Terra",
+      reasoningEffort: "high",
+      connectors: [],
+      readableContextBlockIds: [],
+      retryPolicy: { maxAttempts: 2, upgradeModelTo: "Terra" },
+      status: "idle",
+      attempt: 0,
+      progress: 0,
+      position: { x: 80 + (definition.nodes.length % 3) * 300, y: 100 + Math.floor(definition.nodes.length / 3) * 210 },
+      size: { width: 100, height: 108 },
+      kind: "agent",
+    };
+    definition.nodes.push(node);
+    definition.observers = [createLoopSupervisor(definition.nodes, definition.observers[0])];
+    return this.applyDefinitionMutation(id, definition, {
+      baseRevision: current.revision,
+      actor: "user",
+      rationale: `Added thread: ${node.name}`,
     });
   }
 }

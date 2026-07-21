@@ -13,6 +13,7 @@
   white-space: nowrap;
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
 }
+.ui-button > span { display: inline-flex; align-items: center; justify-content: center; gap: 7px; line-height: 1; }
 
 .ui-button--primary {
   color: #fff;

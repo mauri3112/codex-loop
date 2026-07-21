@@ -204,6 +204,8 @@ export function normalizeWorkflow(workflow: Workflow): Workflow {
       consumedTokens: Math.max(0, run.consumedTokens ?? 0),
       noProgressRounds: Math.max(0, run.noProgressRounds ?? 0),
       checkpoints: Array.isArray(run.checkpoints) ? run.checkpoints : [],
+      threadResults: Array.isArray(run.threadResults) ? run.threadResults : [],
+      events: Array.isArray(run.events) ? run.events : [],
     })),
     threads: threads.map((thread) => ({
       ...thread,

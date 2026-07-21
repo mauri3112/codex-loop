@@ -144,6 +144,28 @@ button.codex-shell__folder-row:hover { background: #41434f; }
 }
 .codex-shell__loop-description { min-height: 0; color: #67a8ff; line-height: 1.35; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .codex-shell__folder-detail:hover { background: #42444f; }
+.codex-shell__loop-type { width: 8px; height: 8px; justify-self: center; border-radius: 50%; background: #8b8e99; box-shadow: 0 0 0 2px rgba(255,255,255,.05); }
+.codex-shell__loop-type.mode-single { background: #8d78e8; }
+.codex-shell__loop-type.mode-scheduled { background: #e5a83e; }
+.codex-shell__loop-type.mode-webhook { background: #3abf8b; }
+
+.codex-shell__new-thread {
+  width: calc(100% - 21px);
+  min-height: 27px;
+  margin: 2px 0 2px 21px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+  color: #bfc8db;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  font-size: 10px;
+  text-align: left;
+}
+.codex-shell__new-thread:hover { color: #fff; background: #454752; }
+.codex-shell__nested-label { display: block; margin: 7px 0 3px 28px; color: #848791; font-size: 8.5px; font-weight: 620; letter-spacing: .05em; text-transform: uppercase; }
 
 .codex-shell__nested-thread {
   display: grid;
@@ -164,6 +186,8 @@ button.codex-shell__folder-row:hover { background: #41434f; }
 .codex-shell__nested-thread:hover { color: #fff; background: #454752; }
 .codex-shell__nested-thread > span:first-child { display: grid; place-items: center; width: 16px; height: 16px; color: #dce8ff; background: #3166a9; border-radius: 50%; font-size: 8px; }
 .codex-shell__nested-thread > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.codex-shell__nested-thread.codex-shell__run-history > .status-indicator { width: 16px; justify-content: center; }
+.codex-shell__nested-thread.codex-shell__run-history > .status-indicator + span { width: auto; height: auto; display: block; overflow: hidden; color: inherit; background: transparent; border-radius: 0; font-size: inherit; text-overflow: ellipsis; white-space: nowrap; }
 
 .codex-shell__account-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; min-height: 44px; gap: 7px; padding: 0 15px; border-top: 1px solid #41434f; }
 .codex-shell__account-row strong { font-size: 11px; font-weight: 500; }
@@ -173,6 +197,18 @@ button.codex-shell__folder-row:hover { background: #41434f; }
 .codex-shell__main { grid-column: 2; grid-row: 2; min-width: 0; min-height: 0; overflow: hidden; background: var(--bg); }
 .codex-shell__content { width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .codex-shell__scrim { display: none; }
+
+.codex-shell__dialog-backdrop { position: fixed; z-index: 600; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(12,13,17,.62); backdrop-filter: blur(3px); }
+.codex-shell__dialog { width: min(480px, 100%); padding: 20px; border: 1px solid #4b4e5b; border-radius: 12px; color: #f2f2f4; background: #2d2f3a; box-shadow: 0 24px 70px rgba(0,0,0,.5); }
+.codex-shell__dialog h2 { margin: 0 0 6px; font-size: 16px; font-weight: 620; }
+.codex-shell__dialog p { margin: 0 0 16px; color: #a7a9b2; font-size: 11px; line-height: 1.45; }
+.codex-shell__dialog textarea { width: 100%; min-height: 110px; padding: 10px; resize: vertical; border: 1px solid #474a56; border-radius: 8px; color: #f2f2f4; background: #292b35; font: inherit; font-size: 12px; line-height: 1.45; outline: 0; }
+.codex-shell__dialog textarea:focus { border-color: #758bd9; }
+.codex-shell__dialog > span { display: block; margin-top: 8px; color: #ffaaa6; font-size: 10px; }
+.codex-shell__dialog footer { display: flex; justify-content: flex-end; gap: 7px; margin-top: 16px; }
+.codex-shell__dialog footer button { height: 32px; padding: 0 12px; border: 1px solid #474a56; border-radius: 7px; color: #bfc0c7; background: #353742; font-size: 11px; }
+.codex-shell__dialog footer button[type="submit"] { border-color: #15171e; color: #fff; background: #171922; }
+.codex-shell__dialog footer button:disabled { opacity: .5; }
 
 @media (max-width: 879px) {
   .codex-shell { grid-template-columns: minmax(0, 1fr); }

@@ -21,11 +21,12 @@ function CapabilityIcon({ kind }: { kind: TaskCapabilityKind }) {
   return <Sparkles size={14} aria-hidden="true" />;
 }
 
-export function SlashAutocompleteTextArea({ value, onChange, rows = 5, placeholder }: {
+export function SlashAutocompleteTextArea({ value, onChange, rows = 5, placeholder, onKeyDown }: {
   value: string;
   onChange: (value: string) => void;
   rows?: number;
   placeholder?: string;
+  onKeyDown?: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
 }) {
   const listboxId = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -65,23 +66,23 @@ export function SlashAutocompleteTextArea({ value, onChange, rows = 5, placehold
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (!open) return;
-    if (event.key === "Escape") {
+    if (open && event.key === "Escape") {
       event.preventDefault();
       setSlashQuery(null);
       return;
     }
-    if (!filtered.length) return;
-    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    if (open && filtered.length && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
       event.preventDefault();
       const direction = event.key === "ArrowDown" ? 1 : -1;
       setActiveIndex((current) => (current + direction + filtered.length) % filtered.length);
       return;
     }
-    if (event.key === "Enter" || event.key === "Tab") {
+    if (open && filtered.length && (event.key === "Enter" || event.key === "Tab")) {
       event.preventDefault();
       choose(filtered[activeIndex] ?? filtered[0]);
+      return;
     }
+    onKeyDown?.(event);
   };
 
   return (

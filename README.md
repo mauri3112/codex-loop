@@ -10,7 +10,7 @@ codex login status
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. The API runs on `http://127.0.0.1:4317`, launches `codex app-server` lazily for the Designer or a real run, and persists versioned Loop definitions plus native Codex thread IDs to `data/codex-loop.json`.
+Open `http://127.0.0.1:5173`. The API runs on `http://127.0.0.1:4317`, launches `codex app-server` lazily for the Designer or a real run, and persists versioned Loop definitions, native Codex thread IDs, and immutable per-run execution results to `data/codex-loop.json`.
 
 Prerequisites:
 
@@ -87,11 +87,13 @@ Once installed through a local Codex plugin marketplace, start a new Codex task 
 
 ## Run modes
 
-The split **Run** control supports three persisted modes:
+The split run control keeps one-time execution separate from the configured automatic trigger:
 
-- **Single run** starts the loop immediately through the native Codex bridge.
+- **Run once** is always available for a saved Loop and opens a dialog for an optional one-time prompt and project folder. It does not replace a configured schedule or webhook.
 - **Scheduled run** starts automatically on selected weekdays and times in the configured IANA time zone. The server checks due schedules every 15 seconds and prevents duplicate starts within the same scheduled minute.
 - **Webhook run** exposes a tokenized `GET`/`POST` endpoint at `/api/triggers/:token`. A JSON POST body or GET query values are merged with configured defaults and made available to every Agent in that run.
+
+The Loop sidebar marks each Loop with a color for its configured trigger type. Expanding the active Loop shows its threads and execution history; every new run freezes thread messages, tool calls, file changes, final outputs, and audit events so later runs cannot overwrite earlier evidence.
 
 In development, copy the trigger URL shown in the dialog (normally port `5173`, proxied to the API). With `npm start`, the UI and trigger endpoint share the API origin (normally port `4317`). To accept calls beyond the local machine, start the server with an appropriate `HOST` value and network controls.
 
@@ -100,13 +102,13 @@ In development, copy the trigger URL shown in the dialog (normally port `5173`, 
 1. Select **Loop**, describe the desired outcome, and let the Designer propose the initial graph.
 2. Continue in chat to add constraints, change integrations, or refine verification. Inspect assumptions, questions, setup requirements, and validation beside the graph preview.
 3. Select **Edit visually** only when you want direct node, edge, Context Block, or Observer controls.
-4. Publish the validated revision explicitly, then use the split Run control to start once, schedule recurring starts, or activate a webhook trigger.
+4. Save the validated revision explicitly, then run it once, schedule recurring starts, or activate a webhook trigger.
 5. Follow context creation and access grants in the Activity and Contexts panes.
 6. Watch real assistant messages, commands, MCP calls, approvals, file changes, failures, and retries stream into the workflow.
 7. Open **Implement the change** to audit its native Codex thread ID, received context, attempts, tool calls, file changes, and final output. The persisted thread is also available to other Codex clients using the same `CODEX_HOME`.
-8. Return to Loop, inspect the activity/audit view, save, reload, and reopen the workflow.
+8. Return to Loop, open a prior run from the sidebar to inspect its frozen results, then save, reload, and reopen the workflow.
 
-Loop schedules nodes whose incoming dependencies have completed. Independent root nodes start in parallel. Pause prevents new nodes from starting, stop interrupts active Codex turns, reset archives the native threads, and run-again resumes each node's persistent thread where possible.
+Loop schedules nodes whose incoming dependencies have completed. Independent root nodes start in parallel. Pause prevents new nodes from starting, stop interrupts active Codex turns, and reset archives the native threads without deleting their stored execution results. Starting another run creates fresh native threads so outputs remain isolated by execution.
 
 ## Architecture
 

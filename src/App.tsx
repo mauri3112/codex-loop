@@ -8,6 +8,7 @@ import { LoopLanding, type LoopTemplateItem } from "./components/landing/LoopLan
 import { LoopDesignerPanel } from "./components/designer/LoopDesignerPanel";
 import { AttentionBanner, InterventionDrawer } from "./components/intervention/InterventionCenter";
 import { RunControl } from "./components/run/RunControl";
+import { RunHistoryView } from "./components/run/RunHistoryView";
 import { CodexShell, type ShellSection } from "./components/shell/CodexShell";
 import { AgentThreadView } from "./components/thread/AgentThreadView";
 import { Button } from "./components/ui/Button";
@@ -90,7 +91,7 @@ function Workspace({ data, onChange, onSave, onRunAction, onDelete, onConfigureR
           <button onClick={() => void runAction("reset")} title="Reset workflow"><RotateCcw size={14} /><span>Reset</span></button>
           <button onClick={() => setEditMode((value) => !value)} title={editMode ? "Return to Designer" : "Edit graph visually"}><Pencil size={14} /><span>{editMode ? "Done editing" : "Edit visually"}</span></button>
           <button className="delete-loop-control" onClick={() => void deleteLoop()} disabled={deleting || ["running", "paused"].includes(workflow.status)} title={["running", "paused"].includes(workflow.status) ? "Stop this Loop before deleting it" : "Delete Loop"}><Trash2 size={14} /><span>{deleting ? "Deleting…" : "Delete"}</span></button>
-          <Button variant="secondary" onClick={save} loading={saving}><Save size={14} />{workflow.lifecycle === "published" ? "Published" : "Publish"}</Button>
+          <Button variant="secondary" onClick={save} loading={saving}><Save size={14} />{workflow.lifecycle === "published" ? "Saved" : "Save"}</Button>
         </div>
       </header>
       <AttentionBanner requests={openAttentionRequests} onOpen={(attentionId) => { setInitialAttentionId(attentionId); setInterventionOpen(true); }} />
@@ -240,18 +241,27 @@ export function App() {
         else navigate(section === "threads" ? "/threads" : `/${section}`);
       }}
       currentWorkflowName={shellWorkflow?.name}
+      currentWorkflowId={shellWorkflow?.id}
       workflowThreads={shellWorkflow?.nodes.map((node) => ({ id: node.threadId, title: node.task, nodeName: node.name, status: node.status, loopCreated: true, parentWorkflowName: shellWorkflow.name }))}
       previousRuns={shellWorkflow?.runs.map((run, index) => ({ id: run.id, label: `Run ${index + 1} · ${run.startedAt ? new Date(run.startedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Not started"}`, status: run.status === "idle" ? "ready" : run.status }))}
-      savedWorkflows={data.workflows.map((workflow) => ({ id: workflow.id, name: workflow.name, description: workflow.mainTask, status: workflow.status, projectPath: workflow.runs.at(-1)?.workingDirectory ?? workflow.threads.find((thread) => thread.codex?.cwd)?.codex?.cwd, activeAgentCount: workflow.threads.filter((thread) => ["starting", "running"].includes(thread.codex?.state ?? "")).length }))}
+      savedWorkflows={data.workflows.map((workflow) => ({ id: workflow.id, name: workflow.name, description: workflow.mainTask, status: workflow.status, runMode: workflow.runConfiguration.mode, projectPath: workflow.runs.at(-1)?.workingDirectory ?? workflow.threads.find((thread) => thread.codex?.cwd)?.codex?.cwd, activeAgentCount: workflow.threads.filter((thread) => ["starting", "running"].includes(thread.codex?.state ?? "")).length }))}
       manualThreads={data.manualThreads}
       onOpenWorkflow={(id) => navigate(`/loop/${id}`)}
+      onOpenRun={(id) => shellWorkflow && navigate(`/loop/${shellWorkflow.id}/runs/${id}`)}
       onOpenThread={(id) => data.workflows.some((workflow) => workflow.threads.some((thread) => thread.id === id)) ? navigate(`/threads/${id}`) : navigate("/threads")}
+      onCreateThread={async (task) => {
+        if (!shellWorkflow) throw new Error("Open a Loop before creating a thread");
+        const updated = await api.createThread(shellWorkflow.id, task);
+        replaceWorkflow(updated);
+        navigate(`/threads/${updated.threads.at(-1)?.id}`);
+      }}
     >
       {error && <div className="app-toast" role="alert">{error}<button onClick={() => setError("")}>×</button></div>}
       <Routes>
         <Route path="/" element={<Navigate to="/loop" replace />} />
         <Route path="/loop" element={<LoopLanding generating={generating} recentWorkflows={data.workflows.filter((workflow) => workflow.lifecycle === "draft").map((workflow) => ({ id: workflow.id, name: workflow.name, description: workflow.mainTask, status: workflow.status, updatedLabel: new Date(workflow.updatedAt).toLocaleDateString(), nodeCount: workflow.nodes.length }))} savedWorkflows={data.workflows.filter((workflow) => workflow.lifecycle === "published").map((workflow) => ({ id: workflow.id, name: workflow.name, description: workflow.mainTask, status: workflow.status, updatedLabel: new Date(workflow.updatedAt).toLocaleDateString(), nodeCount: workflow.nodes.length }))} templates={data.templates} onCreate={() => void create()} onGenerate={(task) => void generate(task)} onOpenWorkflow={(id) => navigate(`/loop/${id}`)} onUseTemplate={(template: LoopTemplateItem) => void generate(`${template.title}. ${template.description}`)} />} />
         <Route path="/loop/:workflowId" element={<Workspace data={data} onChange={changeWorkflow} onSave={save} onRunAction={runAction} onDelete={deleteWorkflow} onConfigureRun={configureRun} onIntervene={intervene} onRespondToAttention={respondToAttention} onOpenThread={(id) => navigate(`/threads/${id}`)} onDesignerMessage={sendDesignerMessage} onUndo={undo} designerSending={designerSendingId === activeWorkflow?.id} onGateDecision={gateDecision} />} />
+        <Route path="/loop/:workflowId/runs/:runId" element={<RunRoute data={data} />} />
         <Route path="/threads/:threadId" element={<ThreadRoute data={data} onSend={sendInstruction} onStop={stopThread} onResolveApproval={resolveApproval} />} />
         <Route path="/threads" element={<StaticCodexScreen section="threads" />} />
         <Route path="/scheduled" element={<StaticCodexScreen section="scheduled" />} />
@@ -262,6 +272,14 @@ export function App() {
       </Routes>
     </CodexShell>
   );
+}
+
+function RunRoute({ data }: { data: AppData }) {
+  const { workflowId = "", runId = "" } = useParams();
+  const navigate = useNavigate();
+  const workflow = data.workflows.find((item) => item.id === workflowId);
+  if (!workflow) return <main className="workflow-missing"><h1>Workflow not found</h1><button onClick={() => navigate("/loop")}>Return to Loop</button></main>;
+  return <RunHistoryView workflow={workflow} runId={runId} onBack={() => navigate(`/loop/${workflow.id}`)} />;
 }
 
 function ThreadRoute({ data, onSend, onStop, onResolveApproval }: { data: AppData; onSend: (workflowId: string, threadId: string, instruction: string) => Promise<void>; onStop: (workflowId: string, threadId: string) => Promise<void>; onResolveApproval: (workflowId: string, threadId: string, decision: "accept" | "decline") => Promise<void> }) {

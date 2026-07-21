@@ -64,13 +64,13 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 9%, transparent);
 }
 
-.loop-landing__composer label { display: block; padding: 13px 15px 2px; font-size: 12px; font-weight: 560; }
+.loop-landing__composer label { display: block; padding: 11px 15px 0; font-size: 12px; font-weight: 560; line-height: 1.2; }
 .loop-landing__composer textarea {
   width: 100%;
   min-height: 82px;
   display: block;
   resize: vertical;
-  padding: 8px 15px 12px;
+  padding: 6px 15px 12px;
   color: var(--text);
   background: transparent;
   border: 0;
@@ -87,7 +87,7 @@
   justify-content: space-between;
   gap: 14px;
   padding: 7px 8px 7px 15px;
-  background: #fafaf8;
+  background: var(--surface-subtle);
   border-top: 1px solid var(--border);
 }
 
@@ -95,9 +95,10 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: var(--faint);
+  color: var(--muted);
   font-size: 11.5px;
 }
+.loop-landing__composer-footer > span svg { color: var(--violet); }
 
 .loop-landing__workflow-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 34px; margin-bottom: 38px; }
 .loop-landing__section-heading { min-height: 28px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }

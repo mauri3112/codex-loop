@@ -21,11 +21,17 @@ const DAYS = [
   { value: 0, short: "S", label: "Sunday" },
 ] as const;
 
-const MODE_LABELS: Record<WorkflowRunConfiguration["mode"], string> = {
-  single: "Single run",
-  scheduled: "Scheduled run",
-  webhook: "Webhook run",
-};
+const HOURS = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0"));
+const MINUTES = Array.from({ length: 60 }, (_, minute) => String(minute).padStart(2, "0"));
+const LOCAL_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+const TIMEZONES = (() => {
+  try {
+    const supported = Intl.supportedValuesOf("timeZone");
+    return [LOCAL_TIMEZONE, ...supported.filter((zone) => zone !== LOCAL_TIMEZONE)];
+  } catch {
+    return [LOCAL_TIMEZONE, "UTC", "Europe/Berlin", "America/New_York", "America/Los_Angeles", "Asia/Tokyo"].filter((zone, index, values) => values.indexOf(zone) === index);
+  }
+})();
 
 function newToken(): string {
   return globalThis.crypto.randomUUID().replace(/-/g, "");
@@ -75,8 +81,7 @@ export function RunControl({ configuration, onStart, onSave, disabled = false }:
 
   const primaryAction = () => {
     if (disabled) return;
-    if (configuration.mode === "single") openDialog("single");
-    else openDialog(configuration.mode);
+    openDialog("single");
   };
 
   const saveDialog = async (event: FormEvent) => {
@@ -89,7 +94,6 @@ export function RunControl({ configuration, onStart, onSave, disabled = false }:
     setError("");
     try {
       if (dialog === "single") {
-        if (configuration.mode !== "single") await onSave({ ...configuration, mode: "single" });
         await onStart({
           ...(singleRun.additionalPrompt?.trim() ? { additionalPrompt: singleRun.additionalPrompt.trim() } : {}),
           ...(singleRun.workingDirectory?.trim() ? { workingDirectory: singleRun.workingDirectory.trim() } : {}),
@@ -113,9 +117,9 @@ export function RunControl({ configuration, onStart, onSave, disabled = false }:
     <>
       <div className="run-control" ref={rootRef}>
         <div className="run-control__split">
-          <button className="run-control__primary" onClick={primaryAction} disabled={pending || disabled} title={disabled ? "Publish this Loop revision before running" : undefined} data-testid="run-primary">
+          <button className="run-control__primary" onClick={primaryAction} disabled={pending || disabled} title={disabled ? "Save this Loop revision before running" : undefined} aria-label="Run once" data-testid="run-primary">
             <Zap size={13} fill="currentColor" />
-            <span>{pending ? "Working…" : MODE_LABELS[configuration.mode]}</span>
+            <span>{pending ? "Working…" : "Run once"}</span>
           </button>
           <button
             className="run-control__toggle"
@@ -133,7 +137,6 @@ export function RunControl({ configuration, onStart, onSave, disabled = false }:
           <div className="run-menu" role="menu" aria-label="Run options">
             <button role="menuitem" onClick={() => openDialog("single")}>
               <Zap size={15} /><span><strong>Single run</strong><small>Start this loop once, right now</small></span>
-              {configuration.mode === "single" ? <Check className="run-menu__check" size={14} /> : null}
             </button>
             <button role="menuitem" onClick={() => openDialog("scheduled")}>
               <CalendarClock size={15} /><span><strong>Scheduled run</strong><small>Run on selected days and times</small></span>
@@ -176,14 +179,18 @@ export function RunControl({ configuration, onStart, onSave, disabled = false }:
                   <div className="run-time-list">
                     {draft.schedule.times.map((time, index) => (
                       <div key={`${time}-${index}`}>
-                        <input type="time" value={time} onChange={(event) => setDraft((current) => ({ ...current, schedule: { ...current.schedule, times: current.schedule.times.map((value, itemIndex) => itemIndex === index ? event.target.value : value) } }))} required />
+                        <div className="run-time-picker" aria-label={`Run time ${index + 1}`}>
+                          <select aria-label={`Hour ${index + 1}`} value={time.split(":")[0]} onChange={(event) => setDraft((current) => ({ ...current, schedule: { ...current.schedule, times: current.schedule.times.map((value, itemIndex) => itemIndex === index ? `${event.target.value}:${value.split(":")[1] ?? "00"}` : value) } }))}>{HOURS.map((hour) => <option key={hour} value={hour}>{hour}</option>)}</select>
+                          <span>:</span>
+                          <select aria-label={`Minute ${index + 1}`} value={time.split(":")[1]} onChange={(event) => setDraft((current) => ({ ...current, schedule: { ...current.schedule, times: current.schedule.times.map((value, itemIndex) => itemIndex === index ? `${value.split(":")[0] ?? "09"}:${event.target.value}` : value) } }))}>{MINUTES.map((minute) => <option key={minute} value={minute}>{minute}</option>)}</select>
+                        </div>
                         {draft.schedule.times.length > 1 ? <button type="button" aria-label={`Remove ${time}`} onClick={() => setDraft((current) => ({ ...current, schedule: { ...current.schedule, times: current.schedule.times.filter((_, itemIndex) => itemIndex !== index) } }))}><Trash2 size={14} /></button> : null}
                       </div>
                     ))}
                     <button type="button" className="run-dialog__add" onClick={() => setDraft((current) => ({ ...current, schedule: { ...current.schedule, times: [...current.schedule.times, "09:00"] } }))}><Plus size={14} /> Add another time</button>
                   </div>
                 </fieldset>
-                <label className="run-dialog__field"><span>Time zone</span><input value={draft.schedule.timezone} onChange={(event) => setDraft((current) => ({ ...current, schedule: { ...current.schedule, timezone: event.target.value } }))} placeholder="Europe/Berlin" required /></label>
+                <label className="run-dialog__field"><span>Time zone</span><select value={draft.schedule.timezone} onChange={(event) => setDraft((current) => ({ ...current, schedule: { ...current.schedule, timezone: event.target.value } }))} required>{TIMEZONES.map((timezone) => <option key={timezone} value={timezone}>{timezone.replaceAll("_", " ")}</option>)}</select></label>
               </div>
             ) : (
               <div className="run-dialog__body">

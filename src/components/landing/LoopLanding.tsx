@@ -135,6 +135,12 @@ export function LoopLanding({
               id="loop-task"
               value={task}
               onChange={(event) => setTask(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
               placeholder="Describe a repository-level task, feature, investigation, or review…"
               rows={3}
             />

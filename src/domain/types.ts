@@ -174,6 +174,23 @@ export interface ThreadRecord {
   lastActivityAt?: string;
 }
 
+export interface RunThreadResult {
+  id: string;
+  nodeId: string;
+  title: string;
+  task: string;
+  definitionOfDone: string;
+  model: AgentModel;
+  connectors: string[];
+  status: AgentStatus;
+  messages: ThreadMessage[];
+  toolCalls: ToolCall[];
+  fileChanges: FileChange[];
+  attempts: ExecutionAttempt[];
+  finalOutput?: string;
+  lastActivityAt?: string;
+}
+
 export interface WorkflowRun {
   id: string;
   status: "idle" | "running" | "paused" | "stopped" | "completed";
@@ -193,6 +210,8 @@ export interface WorkflowRun {
   checkpoints?: WorkflowCheckpoint[];
   repositoryRevision?: string;
   parentRun?: { workflowId: string; nodeId: string };
+  threadResults?: RunThreadResult[];
+  events?: AuditEvent[];
 }
 
 export interface SingleRunOptions {

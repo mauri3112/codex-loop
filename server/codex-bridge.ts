@@ -242,9 +242,14 @@ export class CodexBridge implements CodexBridgeService {
   async startWorkflow(workflowId: string, invocation: RunInvocation = { source: "manual" }): Promise<Workflow> {
     const candidate = await this.store.getWorkflow(workflowId);
     if (candidate.lifecycle !== "published") throw new BridgeInputError("Publish this Loop revision before starting it");
+    if (["running", "paused"].includes(candidate.status)) throw new BridgeInputError("Workflow is already running");
     const workingDirectory = resolveWorkingDirectory(invocation.workingDirectory);
     await this.connect();
     const repositoryRevision = await currentRepositoryRevision(workingDirectory);
+    await Promise.all(candidate.threads.flatMap((thread) => thread.codex?.threadId
+      ? [this.client.archiveThread(thread.codex.threadId).catch(() => undefined)]
+      : []));
+    for (const thread of candidate.threads) if (thread.codex?.threadId) this.nativeThreads.delete(thread.codex.threadId);
     const workflow = await this.store.mutateWorkflow(workflowId, (draft) => {
       if (["running", "paused"].includes(draft.status)) throw new Error("Workflow is already running");
       if (draft.lifecycle !== "published") throw new BridgeInputError("Publish this Loop revision before starting it");
@@ -252,6 +257,7 @@ export class CodexBridge implements CodexBridgeService {
       if (draft.validationIssues.some((issue) => issue.severity === "error")) throw new BridgeInputError("Resolve Loop validation errors before starting");
       if (draft.capabilityBindings.some((binding) => binding.status !== "available")) throw new BridgeInputError("Resolve required capability bindings before starting");
       if (draft.secretRequirements.some((secret) => secret.status !== "bound")) throw new BridgeInputError("Bind required secrets before starting");
+      snapshotCurrentRun(draft);
       const runNumber = draft.runs.length + 1;
       const run: Workflow["runs"][number] = {
         id: `run-${draft.id}-${runNumber}`,
@@ -270,11 +276,24 @@ export class CodexBridge implements CodexBridgeService {
         ...(invocation.additionalPrompt?.trim() ? { additionalPrompt: invocation.additionalPrompt.trim() } : {}),
         ...(invocation.input && Object.keys(invocation.input).length ? { input: invocation.input } : {}),
         startedAt: now(),
+        threadResults: [],
+        events: [],
       };
       const priorCheckpoints = draft.runs.flatMap((candidate) => candidate.checkpoints ?? []);
       draft.runs.push(run);
       draft.status = "running";
       draft.events = [];
+      for (const thread of draft.threads) {
+        thread.status = "idle";
+        thread.messages = [{ id: `${thread.id}-assignment-${runNumber}`, role: "system", content: `Assigned by Codex Loop: ${thread.task}`, timestamp: now() }];
+        thread.toolCalls = [];
+        thread.fileChanges = [];
+        thread.attempts = [];
+        thread.finalOutput = undefined;
+        thread.pendingApproval = undefined;
+        thread.lastActivityAt = undefined;
+        thread.codex = { state: "disconnected" };
+      }
       for (const node of draft.nodes) {
         const hasIncoming = draft.edges.some((edge) => edge.target === node.id);
         const cacheKey = checkpointCacheKey(draft, node, run);
@@ -300,6 +319,7 @@ export class CodexBridge implements CodexBridgeService {
       }
       const sourceLabel = invocation.source === "schedule" ? "schedule" : invocation.source === "webhook" ? "webhook" : "Run control";
       addEvent(draft, { kind: "workflow", type: "workflow.started", actor: invocation.source === "manual" ? "You" : "Codex Loop", message: `Workflow started by ${sourceLabel} in ${workingDirectory}` });
+      snapshotCurrentRun(draft);
     });
     void this.schedule(workflowId);
     return workflow;
@@ -358,6 +378,8 @@ export class CodexBridge implements CodexBridgeService {
       expireOpenAttention(draft, "Workflow stopped");
       failPendingInterventions(draft, "Workflow stopped before delivery");
       addEvent(draft, { kind: "workflow", type: "workflow.stopped", actor: "You", message: "Workflow stopped and active Codex turns interrupted" });
+      if (run) run.completedAt = now();
+      snapshotCurrentRun(draft);
     });
   }
 
@@ -381,6 +403,7 @@ export class CodexBridge implements CodexBridgeService {
     const workflow = await this.store.getWorkflow(workflowId);
     await Promise.all(workflow.threads.flatMap((thread) => thread.codex?.threadId ? [this.client.archiveThread(thread.codex.threadId).catch(() => undefined)] : []));
     return this.store.mutateWorkflow(workflowId, (draft) => {
+      snapshotCurrentRun(draft);
       draft.status = draft.nodes.length ? "ready" : "draft";
       draft.contextBlocks = draft.contextBlocks.filter((block) => block.createdBy === "manual");
       for (const node of draft.nodes) {
@@ -1144,7 +1167,10 @@ export class CodexBridge implements CodexBridgeService {
           } else if (status === "failed") {
             draft.status = "failed";
             const run = draft.runs.at(-1);
-            if (run?.status === "running") run.status = "stopped";
+            if (run?.status === "running") {
+              run.status = "stopped";
+              run.completedAt = now();
+            }
             failPendingInterventions(draft, "Workflow failed before queued guidance could be delivered");
             addRetryExhaustedAttention(draft, node, thread);
           }
@@ -1153,6 +1179,7 @@ export class CodexBridge implements CodexBridgeService {
         addEvent(draft, { kind: "agent", type: `node.${status || "failed"}`, actor: node?.name ?? thread.title, message: error || `Codex turn ${status || "failed"}`, nodeId: node?.id });
       }
       finishWorkflowIfDone(draft);
+      snapshotCurrentRun(draft);
     });
     if (status === "completed") await this.deliverQueuedInterventions(workflow.id, location.threadId);
     const current = await this.store.getWorkflow(workflow.id);
@@ -1447,10 +1474,14 @@ function parseSelectedRoutes(output: string, workflow: Workflow, outgoing: Workf
 function failForBudget(workflow: Workflow, reason: string): void {
   workflow.status = "failed";
   const run = workflow.runs.at(-1);
-  if (run?.status === "running") run.status = "stopped";
+  if (run?.status === "running") {
+    run.status = "stopped";
+    run.completedAt = now();
+  }
   for (const node of workflow.nodes) if (!["completed", "skipped", "failed", "stopped"].includes(node.status)) node.status = "stopped";
   for (const thread of workflow.threads) if (!["completed", "skipped", "failed", "stopped"].includes(thread.status)) thread.status = "stopped";
   addEvent(workflow, { kind: "workflow", type: "workflow.budget-exhausted", actor: "Loop supervisor", message: reason });
+  snapshotCurrentRun(workflow);
 }
 
 function buildNodePrompt(workflow: Workflow, node: AgentNode): string {
@@ -1506,6 +1537,29 @@ function finishWorkflowIfDone(workflow: Workflow): void {
     run.completedAt = now();
   }
   addEvent(workflow, { kind: "workflow", type: "workflow.completed", actor: "Codex Loop", message: `Workflow completed through ${workflow.nodes.length} native Codex threads` });
+  snapshotCurrentRun(workflow);
+}
+
+function snapshotCurrentRun(workflow: Workflow): void {
+  const run = workflow.runs.at(-1);
+  if (!run) return;
+  run.threadResults = workflow.threads.map((thread) => ({
+    id: thread.id,
+    nodeId: thread.nodeId,
+    title: thread.title,
+    task: thread.task,
+    definitionOfDone: thread.definitionOfDone,
+    model: thread.model,
+    connectors: [...thread.connectors],
+    status: thread.status,
+    messages: structuredClone(thread.messages),
+    toolCalls: structuredClone(thread.toolCalls),
+    fileChanges: structuredClone(thread.fileChanges),
+    attempts: structuredClone(thread.attempts),
+    finalOutput: thread.finalOutput,
+    lastActivityAt: thread.lastActivityAt,
+  }));
+  run.events = structuredClone(workflow.events.filter((event) => !event.runId || event.runId === run.id));
 }
 
 function requireCurrentRun(workflow: Workflow, runId: string, requireActive = true): void {

@@ -13,6 +13,7 @@ import { handleMcpRequest } from "./mcp.js";
 const generateSchema = z.object({ task: z.string().trim().min(1).max(12_000) });
 const instructionSchema = z.object({ instruction: z.string().trim().min(1).max(12_000) });
 const designerMessageSchema = z.object({ message: z.string().trim().min(1).max(12_000) });
+const createThreadSchema = z.object({ task: z.string().trim().min(1).max(12_000) });
 const approvalSchema = z.object({ decision: z.enum(["accept", "decline"]) });
 const gateDecisionSchema = z.object({ decision: z.enum(["approve", "decline"]) });
 const runActionSchema = z.enum(["start", "pause", "resume", "stop", "reset"]);
@@ -257,6 +258,14 @@ export function createApp(
     asyncRoute(async (request, response) => {
       const { message } = designerMessageSchema.parse(request.body);
       response.json(await designer.sendMessage(String(request.params.id), message));
+    }),
+  );
+
+  app.post(
+    "/api/workflows/:id/threads",
+    asyncRoute(async (request, response) => {
+      const { task } = createThreadSchema.parse(request.body);
+      response.status(201).json(await store.addWorkflowThread(String(request.params.id), task));
     }),
   );
 

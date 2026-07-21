@@ -37,6 +37,13 @@ describe("Codex app-server bridge", () => {
     expect(completed.threads.every((thread) => thread.toolCalls.some((tool) => tool.output === "bridge-ok"))).toBe(true);
     expect(completed.threads.every((thread) => thread.finalOutput?.startsWith("Native result"))).toBe(true);
     expect(completed.events.some((event) => event.type === "workflow.completed")).toBe(true);
+    expect(completed.runs.at(-1)?.threadResults).toHaveLength(completed.threads.length);
+    expect(completed.runs.at(-1)?.threadResults?.every((thread) => thread.finalOutput?.startsWith("Native result"))).toBe(true);
+    expect(completed.runs.at(-1)?.events?.some((event) => event.type === "workflow.completed")).toBe(true);
+
+    const reset = await bridge.resetWorkflow(workflow.id);
+    expect(reset.threads.every((thread) => thread.finalOutput === undefined)).toBe(true);
+    expect(reset.runs.at(-1)?.threadResults?.every((thread) => thread.finalOutput?.startsWith("Native result"))).toBe(true);
   });
 
   it("applies per-run prompt and working-directory overrides to native workers", async () => {

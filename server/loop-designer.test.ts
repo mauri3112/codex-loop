@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createBlankWorkflow } from "../src/data/seed.js";
 import { CodexAppServerClient } from "./codex-app-server.js";
-import { CodexLoopDesigner } from "./loop-designer.js";
+import { CodexLoopDesigner, validateStrictObjectSchemas } from "./loop-designer.js";
 import { JsonWorkflowStore } from "./store.js";
 
 const fixture = path.resolve(process.cwd(), "server/fixtures/fake-app-server.mjs");
@@ -16,6 +16,15 @@ describe("persistent Loop Designer", () => {
   afterEach(async () => {
     await designer?.close();
     if (directory) await rm(directory, { recursive: true, force: true });
+  });
+
+  it("rejects response schemas whose object properties are not all required", () => {
+    expect(() => validateStrictObjectSchemas({
+      type: "object",
+      additionalProperties: false,
+      properties: { requiredValue: { type: "string" }, missingValue: { type: "string" } },
+      required: ["requiredValue"],
+    })).toThrow("required is missing missingValue");
   });
 
   it("compiles a schema-constrained proposal into a versioned graph", async () => {

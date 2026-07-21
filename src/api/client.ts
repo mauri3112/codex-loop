@@ -49,6 +49,7 @@ export const api = {
   mutate: (id: string, input: { baseRevision: number; actor: "user" | "designer" | "system" | "mcp"; rationale: string; definition: WorkflowDefinition }) => request<Workflow>(`/api/workflows/${id}/mutations`, { method: "POST", body: JSON.stringify(input) }),
   undo: (id: string, mutationId?: string) => request<Workflow>(`/api/workflows/${id}/undo`, { method: "POST", body: JSON.stringify({ mutationId }) }),
   sendDesignerMessage: (id: string, message: string) => request<Workflow>(`/api/workflows/${id}/designer/messages`, { method: "POST", body: JSON.stringify({ message }) }),
+  createThread: (id: string, task: string) => request<Workflow>(`/api/workflows/${id}/threads`, { method: "POST", body: JSON.stringify({ task }) }),
   bridgeStatus: () => request<BridgeStatus>("/api/bridge/status"),
   connectBridge: () => request<BridgeStatus>("/api/bridge/connect", { method: "POST", body: JSON.stringify({}) }),
   taskCapabilities: () => request<TaskCapabilitiesResponse>("/api/task-capabilities"),

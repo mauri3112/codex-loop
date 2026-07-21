@@ -1,4 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowLeft,
   ArrowRight,
@@ -11,6 +12,7 @@ import {
   PanelLeft,
   PanelLeftClose,
   Plug,
+  Plus,
   Search,
   SquarePen,
 } from "lucide-react";
@@ -36,6 +38,7 @@ export interface ShellWorkflowItem {
   status: WorkflowStatus;
   projectPath?: string;
   activeAgentCount?: number;
+  runMode: "single" | "scheduled" | "webhook";
 }
 
 export interface ShellRunItem {
@@ -49,6 +52,7 @@ export interface CodexShellProps {
   activeSection: ShellSection;
   onNavigate: (section: ShellSection) => void;
   currentWorkflowName?: string;
+  currentWorkflowId?: string;
   workflowThreads?: ShellThreadItem[];
   previousRuns?: ShellRunItem[];
   savedWorkflows?: ShellWorkflowItem[];
@@ -56,6 +60,7 @@ export interface CodexShellProps {
   onOpenWorkflow?: (workflowId: string) => void;
   onOpenRun?: (runId: string) => void;
   onOpenThread?: (threadId: string) => void;
+  onCreateThread?: (task: string) => Promise<void>;
   sidebarOpen?: boolean;
   onSidebarOpenChange?: (open: boolean) => void;
 }
@@ -74,14 +79,22 @@ export function CodexShell({
   activeSection,
   onNavigate,
   currentWorkflowName,
+  currentWorkflowId,
   workflowThreads = [],
+  previousRuns = [],
   savedWorkflows = [],
   onOpenWorkflow,
+  onOpenRun,
   onOpenThread,
+  onCreateThread,
   sidebarOpen,
   onSidebarOpenChange,
 }: CodexShellProps) {
   const [uncontrolledSidebarOpen, setUncontrolledSidebarOpen] = useState(false);
+  const [newThreadOpen, setNewThreadOpen] = useState(false);
+  const [newThreadTask, setNewThreadTask] = useState("");
+  const [creatingThread, setCreatingThread] = useState(false);
+  const [createThreadError, setCreateThreadError] = useState("");
   const isSidebarOpen = sidebarOpen ?? uncontrolledSidebarOpen;
   const setSidebarOpen = onSidebarOpenChange ?? setUncontrolledSidebarOpen;
   const projects = useMemo(() => {
@@ -154,18 +167,28 @@ export function CodexShell({
             <h2 id="loops-heading" className="codex-shell__section-label">Loops</h2>
             <div className="codex-shell__list">
               {savedWorkflows.map((workflow) => {
-                const active = workflow.name === currentWorkflowName;
+                const active = workflow.id === currentWorkflowId || (!currentWorkflowId && workflow.name === currentWorkflowName);
                 return (
                   <div className={`codex-shell__folder codex-shell__loop-folder${active ? " is-active" : ""}`} key={workflow.id}>
                     <button type="button" className="codex-shell__folder-row" onClick={() => onOpenWorkflow?.(workflow.id)}>
-                      <FolderGit2 size={13} /><strong>{workflow.name}</strong><StatusIndicator status={workflow.status} />
+                      <span className={`codex-shell__loop-type mode-${workflow.runMode}`} title={`${workflow.runMode} execution`} aria-label={`${workflow.runMode} execution`} /><strong>{workflow.name}</strong><StatusIndicator status={workflow.status} />
                     </button>
                     {workflow.description ? <button type="button" className="codex-shell__folder-detail codex-shell__loop-description" onClick={() => onOpenWorkflow?.(workflow.id)}>{workflow.description}</button> : null}
-                    {active ? workflowThreads.map((thread, index) => (
-                      <button type="button" className="codex-shell__nested-thread" key={thread.id} onClick={() => onOpenThread?.(thread.id)}>
-                        <span>{index + 1}</span><span>{thread.nodeName ?? thread.title}</span>
-                      </button>
-                    )) : null}
+                    {active ? <>
+                      <button type="button" className="codex-shell__new-thread" onClick={() => { setCreateThreadError(""); setNewThreadOpen(true); }}><Plus size={12} />New thread</button>
+                      {workflowThreads.length ? <span className="codex-shell__nested-label">Threads</span> : null}
+                      {workflowThreads.map((thread, index) => (
+                        <button type="button" className="codex-shell__nested-thread" key={thread.id} onClick={() => onOpenThread?.(thread.id)}>
+                          <span>{index + 1}</span><span>{thread.nodeName ?? thread.title}</span>
+                        </button>
+                      ))}
+                      {previousRuns.length ? <span className="codex-shell__nested-label">Run history</span> : null}
+                      {[...previousRuns].reverse().map((run) => (
+                        <button type="button" className="codex-shell__nested-thread codex-shell__run-history" key={run.id} onClick={() => onOpenRun?.(run.id)}>
+                          <StatusIndicator status={run.status} /><span>{run.label}</span>
+                        </button>
+                      ))}
+                    </> : null}
                   </div>
                 );
               })}
@@ -179,6 +202,24 @@ export function CodexShell({
       <main className="codex-shell__main">
         <div className="codex-shell__content">{children}</div>
       </main>
+      {newThreadOpen ? createPortal(
+        <div className="codex-shell__dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !creatingThread) setNewThreadOpen(false); }}>
+          <form className="codex-shell__dialog" role="dialog" aria-modal="true" aria-labelledby="new-thread-title" onSubmit={(event) => {
+            event.preventDefault();
+            if (!newThreadTask.trim() || !onCreateThread) return;
+            setCreatingThread(true);
+            setCreateThreadError("");
+            void onCreateThread(newThreadTask.trim()).then(() => { setNewThreadTask(""); setNewThreadOpen(false); }).catch((reason) => setCreateThreadError(reason instanceof Error ? reason.message : "Could not create thread")).finally(() => setCreatingThread(false));
+          }}>
+            <h2 id="new-thread-title">New Loop thread</h2>
+            <p>Add an independent task to this Loop’s graph. The Loop will return to draft until you save it.</p>
+            <textarea autoFocus rows={5} value={newThreadTask} onChange={(event) => setNewThreadTask(event.target.value)} placeholder="What should this thread do?" />
+            {createThreadError ? <span role="alert">{createThreadError}</span> : null}
+            <footer><button type="button" onClick={() => setNewThreadOpen(false)} disabled={creatingThread}>Cancel</button><button type="submit" disabled={!newThreadTask.trim() || creatingThread}>{creatingThread ? "Creating…" : "Create thread"}</button></footer>
+          </form>
+        </div>,
+        document.body,
+      ) : null}
     </div>
   );
 }

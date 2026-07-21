@@ -57,7 +57,7 @@ interface PendingTurn {
 const proposalSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["response", "name", "objective", "assumptions", "questions", "steps", "secretRequirements"],
+  required: ["response", "name", "objective", "assumptions", "questions", "steps", "secretRequirements", "budgets"],
   properties: {
     response: { type: "string" },
     name: { type: "string" },
@@ -69,19 +69,24 @@ const proposalSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["key", "name", "kind", "role", "task", "definitionOfDone", "model", "reasoningEffort", "dependsOn", "capabilities"],
+        required: ["key", "name", "kind", "role", "task", "definitionOfDone", "model", "reasoningEffort", "dependsOn", "capabilities", "orchestration"],
         properties: {
           key: { type: "string" }, name: { type: "string" }, kind: { enum: ["agent", "map", "join", "condition", "loop", "verify", "gate", "subworkflow"] },
           role: { enum: ["investigator", "implementer", "tester", "reviewer", "custom"] }, task: { type: "string" }, definitionOfDone: { type: "string" },
           model: { enum: ["Sol", "Terra", "Luna"] }, reasoningEffort: { enum: ["low", "medium", "high", "xhigh", "max"] },
           dependsOn: { type: "array", items: { type: "string" } }, capabilities: { type: "array", items: { type: "string" } },
-          orchestration: {
+          orchestration: { anyOf: [{
             type: "object", additionalProperties: false,
+            required: ["collectionExpression", "conditionExpression", "stopCondition", "maximumIterations", "subworkflowId", "verificationRubric"],
             properties: {
-              collectionExpression: { type: "string" }, conditionExpression: { type: "string" }, stopCondition: { type: "string" },
-              maximumIterations: { type: "integer", minimum: 1 }, subworkflowId: { type: "string" }, verificationRubric: { type: "string" },
+              collectionExpression: { anyOf: [{ type: "string" }, { type: "null" }] },
+              conditionExpression: { anyOf: [{ type: "string" }, { type: "null" }] },
+              stopCondition: { anyOf: [{ type: "string" }, { type: "null" }] },
+              maximumIterations: { anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }] },
+              subworkflowId: { anyOf: [{ type: "string" }, { type: "null" }] },
+              verificationRubric: { anyOf: [{ type: "string" }, { type: "null" }] },
             },
-          },
+          }, { type: "null" }] },
         },
       },
     },
@@ -89,16 +94,22 @@ const proposalSchema = {
       type: "array",
       items: { type: "object", additionalProperties: false, required: ["key", "description", "requiredBy"], properties: { key: { type: "string" }, description: { type: "string" }, requiredBy: { type: "array", items: { type: "string" } } } },
     },
-    budgets: {
+    budgets: { anyOf: [{
       type: "object", additionalProperties: false,
+      required: ["maximumConcurrentAgents", "maximumTotalAgents", "maximumIterations", "maximumWallClockMinutes", "maximumTokens", "maximumNoProgressRounds"],
       properties: {
-        maximumConcurrentAgents: { type: "integer", minimum: 1, maximum: 16 }, maximumTotalAgents: { type: "integer", minimum: 1, maximum: 1000 },
-        maximumIterations: { type: "integer", minimum: 1 }, maximumWallClockMinutes: { type: "integer", minimum: 1 },
-        maximumTokens: { type: "integer", minimum: 1 }, maximumNoProgressRounds: { type: "integer", minimum: 1 },
+        maximumConcurrentAgents: { anyOf: [{ type: "integer", minimum: 1, maximum: 16 }, { type: "null" }] },
+        maximumTotalAgents: { anyOf: [{ type: "integer", minimum: 1, maximum: 1000 }, { type: "null" }] },
+        maximumIterations: { anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }] },
+        maximumWallClockMinutes: { anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }] },
+        maximumTokens: { anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }] },
+        maximumNoProgressRounds: { anyOf: [{ type: "integer", minimum: 1 }, { type: "null" }] },
       },
-    },
+    }, { type: "null" }] },
   },
 } as const;
+
+validateStrictObjectSchemas(proposalSchema);
 
 const now = () => new Date().toISOString();
 const makeId = (prefix: string) => `${prefix}-${globalThis.crypto.randomUUID()}`;
@@ -373,11 +384,39 @@ function compileProposal(workflow: Workflow, proposal: DesignerProposal, capabil
 }
 
 function parseProposal(output: string): DesignerProposal {
-  const value = JSON.parse(output) as Partial<DesignerProposal>;
+  const value = JSON.parse(output) as Partial<DesignerProposal> & { budgets?: Record<string, unknown> | null };
   if (!value || typeof value.response !== "string" || !Array.isArray(value.steps) || !Array.isArray(value.questions) || !Array.isArray(value.assumptions) || !Array.isArray(value.secretRequirements)) {
     throw new Error("Loop Designer returned an invalid structured proposal");
   }
-  return value as DesignerProposal;
+  const steps = value.steps.map((step) => ({
+    ...step,
+    orchestration: step.orchestration && typeof step.orchestration === "object"
+      ? Object.fromEntries(Object.entries(step.orchestration).filter(([, item]) => item !== null)) as AgentNode["orchestration"]
+      : undefined,
+  }));
+  const budgets = value.budgets && typeof value.budgets === "object"
+    ? Object.fromEntries(Object.entries(value.budgets).filter(([, item]) => item !== null)) as Partial<Workflow["budgets"]>
+    : undefined;
+  return { ...(value as DesignerProposal), steps, budgets };
+}
+
+export function validateStrictObjectSchemas(schema: unknown, context = "schema"): void {
+  if (!schema || typeof schema !== "object") return;
+  const record = schema as Record<string, unknown>;
+  if (record.type === "object" && record.properties && typeof record.properties === "object") {
+    const propertyKeys = Object.keys(record.properties as Record<string, unknown>);
+    const required = Array.isArray(record.required) ? record.required : [];
+    const missing = propertyKeys.filter((key) => !required.includes(key));
+    if (missing.length) throw new Error(`Invalid strict JSON schema at ${context}: required is missing ${missing.join(", ")}`);
+  }
+  for (const [key, child] of Object.entries(record)) {
+    if (key === "properties" && child && typeof child === "object") {
+      for (const [property, propertySchema] of Object.entries(child as Record<string, unknown>)) validateStrictObjectSchemas(propertySchema, `${context}.properties.${property}`);
+    } else if (key === "items" || key === "anyOf") {
+      if (Array.isArray(child)) child.forEach((item, index) => validateStrictObjectSchemas(item, `${context}.${key}[${index}]`));
+      else validateStrictObjectSchemas(child, `${context}.${key}`);
+    }
+  }
 }
 
 function slug(value: string): string {

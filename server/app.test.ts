@@ -127,6 +127,20 @@ describe("Codex Loop API and persistence", () => {
     expect(rejected.body.error).toContain("Stop this Loop");
   });
 
+  it("adds a new Terra thread to a Loop as a versioned draft", async () => {
+    const created = await json<Workflow>("/api/workflows/generate", { method: "POST", body: JSON.stringify({ task: "Extend this Loop" }) });
+    const added = await json<Workflow>(`/api/workflows/${created.body.id}/threads`, {
+      method: "POST",
+      body: JSON.stringify({ task: "Independently inspect accessibility regressions" }),
+    });
+    expect(added.response.status).toBe(201);
+    expect(added.body.nodes).toHaveLength(created.body.nodes.length + 1);
+    expect(added.body.threads).toHaveLength(created.body.threads.length + 1);
+    expect(added.body.nodes.at(-1)).toMatchObject({ configuredModel: "Terra", role: "custom" });
+    expect(added.body.lifecycle).toBe("draft");
+    expect(added.body.mutations.at(-1)?.rationale).toContain("Added thread");
+  });
+
   it("applies optimistic definition mutations and records undo as a new revision", async () => {
     const created = await json<Workflow>("/api/workflows/generate", { method: "POST", body: JSON.stringify({ task: "Version this Loop" }) });
     const definition = workflowDefinition(created.body);
