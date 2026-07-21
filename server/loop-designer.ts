@@ -28,6 +28,7 @@ interface ProposalStep {
   task: string;
   definitionOfDone: string;
   model: AgentModel;
+  retryModel: AgentModel;
   reasoningEffort: NonNullable<AgentNode["reasoningEffort"]>;
   dependsOn: string[];
   capabilities: string[];
@@ -42,6 +43,7 @@ interface DesignerProposal {
   questions: string[];
   steps: ProposalStep[];
   secretRequirements: Array<{ key: string; description: string; requiredBy: string[] }>;
+  supervisorModel: AgentModel;
   budgets?: Partial<Workflow["budgets"]>;
 }
 
@@ -57,7 +59,7 @@ interface PendingTurn {
 const proposalSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["response", "name", "objective", "assumptions", "questions", "steps", "secretRequirements", "budgets"],
+  required: ["response", "name", "objective", "assumptions", "questions", "steps", "secretRequirements", "supervisorModel", "budgets"],
   properties: {
     response: { type: "string" },
     name: { type: "string" },
@@ -69,11 +71,11 @@ const proposalSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["key", "name", "kind", "role", "task", "definitionOfDone", "model", "reasoningEffort", "dependsOn", "capabilities", "orchestration"],
+        required: ["key", "name", "kind", "role", "task", "definitionOfDone", "model", "retryModel", "reasoningEffort", "dependsOn", "capabilities", "orchestration"],
         properties: {
           key: { type: "string" }, name: { type: "string" }, kind: { enum: ["agent", "map", "join", "condition", "loop", "verify", "gate", "subworkflow"] },
           role: { enum: ["investigator", "implementer", "tester", "reviewer", "custom"] }, task: { type: "string" }, definitionOfDone: { type: "string" },
-          model: { enum: ["Sol", "Terra", "Luna"] }, reasoningEffort: { enum: ["low", "medium", "high", "xhigh", "max"] },
+          model: { enum: ["Sol", "Terra", "Luna"] }, retryModel: { enum: ["Sol", "Terra", "Luna"] }, reasoningEffort: { enum: ["low", "medium", "high", "xhigh", "max"] },
           dependsOn: { type: "array", items: { type: "string" } }, capabilities: { type: "array", items: { type: "string" } },
           orchestration: { anyOf: [{
             type: "object", additionalProperties: false,
@@ -94,6 +96,7 @@ const proposalSchema = {
       type: "array",
       items: { type: "object", additionalProperties: false, required: ["key", "description", "requiredBy"], properties: { key: { type: "string" }, description: { type: "string" }, requiredBy: { type: "array", items: { type: "string" } } } },
     },
+    supervisorModel: { enum: ["Sol", "Terra", "Luna"] },
     budgets: { anyOf: [{
       type: "object", additionalProperties: false,
       required: ["maximumConcurrentAgents", "maximumTotalAgents", "maximumIterations", "maximumWallClockMinutes", "maximumTokens", "maximumNoProgressRounds"],
@@ -292,6 +295,7 @@ function buildDesignerPrompt(workflow: Workflow, message: string, capabilities: 
   return [
     "Update the Loop in response to the user's message.",
     "Return the complete desired step list, not a patch. Preserve useful existing work unless the user asks to replace it.",
+    "Return both the primary and retry-upgrade model for every step, plus the supervisor recovery model. When the user asks to replace a model, update every matching primary, retry, and supervisor assignment.",
     "Use capabilities only when they are available. If access is missing, describe setup in questions or assumptions; never request a credential value.",
     "Every loop must have measurable verification, a bounded stop condition for repeating work, and conservative budgets.",
     `User message:\n${message}`,
@@ -324,7 +328,7 @@ function compileProposal(workflow: Workflow, proposal: DesignerProposal, capabil
       reasoningEffort: step.reasoningEffort,
       connectors: [...step.capabilities],
       readableContextBlockIds: existing?.readableContextBlockIds ?? [],
-      retryPolicy: existing?.retryPolicy ?? { maxAttempts: 2, upgradeModelTo: "Sol" },
+      retryPolicy: { maxAttempts: existing?.retryPolicy.maxAttempts ?? 2, upgradeModelTo: step.retryModel ?? existing?.retryPolicy.upgradeModelTo ?? "Sol" },
       status: "idle",
       attempt: 0,
       progress: 0,
@@ -364,13 +368,15 @@ function compileProposal(workflow: Workflow, proposal: DesignerProposal, capabil
   }));
   const assumptionsBlockId = `${workflow.id}-designer-brief`;
   for (const node of nodes) node.readableContextBlockIds = unique([...node.readableContextBlockIds, assumptionsBlockId]);
+  const supervisor = createLoopSupervisor(nodes, current.observers[0]);
+  supervisor.modelUpgradeTo = proposal.supervisorModel ?? supervisor.modelUpgradeTo;
   return {
     ...current,
     name: proposal.name.trim() || current.name,
     mainTask: proposal.objective.trim() || current.mainTask,
     nodes,
     edges,
-    observers: [createLoopSupervisor(nodes, current.observers[0])],
+    observers: [supervisor],
     contextBlocks: [{
       id: assumptionsBlockId, title: "Designer brief", summary: [proposal.objective, ...proposal.assumptions.map((item) => `Assumption: ${item}`)].join("\n"),
       category: "acceptance-criteria", createdBy: "agent", allowedAgentNodeIds: nodes.map((node) => node.id), estimatedTokens: 300,

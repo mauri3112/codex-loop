@@ -38,10 +38,11 @@ describe("persistent Loop Designer", () => {
       assumptions: ["The current repository is the target."],
       questions: [],
       steps: [
-        { key: "implement", name: "Implement", kind: "agent", role: "implementer", task: "Implement the scoped change.", definitionOfDone: "The change builds.", model: "Terra", reasoningEffort: "high", dependsOn: [], capabilities: ["cli:github"] },
-        { key: "verify", name: "Verify", kind: "verify", role: "tester", task: "Run the relevant verification.", definitionOfDone: "Tests pass with evidence.", model: "Sol", reasoningEffort: "xhigh", dependsOn: ["implement"], capabilities: [], orchestration: { verificationRubric: "Build and tests must pass." } },
+        { key: "implement", name: "Implement", kind: "agent", role: "implementer", task: "Implement the scoped change.", definitionOfDone: "The change builds.", model: "Terra", retryModel: "Terra", reasoningEffort: "high", dependsOn: [], capabilities: ["cli:github"] },
+        { key: "verify", name: "Verify", kind: "verify", role: "tester", task: "Run the relevant verification.", definitionOfDone: "Tests pass with evidence.", model: "Sol", retryModel: "Terra", reasoningEffort: "xhigh", dependsOn: ["implement"], capabilities: [], orchestration: { verificationRubric: "Build and tests must pass." } },
       ],
       secretRequirements: [],
+      supervisorModel: "Terra",
       budgets: { maximumConcurrentAgents: 2, maximumTotalAgents: 6, maximumIterations: 3, maximumWallClockMinutes: 30, maximumNoProgressRounds: 2 },
     };
     const client = new CodexAppServerClient({ command: process.execPath, args: [fixture], env: { FAKE_AGENT_OUTPUT: JSON.stringify(proposal) } });
@@ -55,6 +56,8 @@ describe("persistent Loop Designer", () => {
     const updated = await designer.sendMessage(draft.id, "Create a Loop to implement and verify this change");
     expect(updated.revision).toBe(1);
     expect(updated.nodes.map((node) => node.kind)).toEqual(["agent", "verify"]);
+    expect(updated.nodes.map((node) => node.retryPolicy.upgradeModelTo)).toEqual(["Terra", "Terra"]);
+    expect(updated.observers[0].modelUpgradeTo).toBe("Terra");
     expect(updated.edges).toHaveLength(1);
     expect(updated.capabilityBindings[0]).toMatchObject({ id: "cli:github", status: "available", authStatus: "verified" });
     expect(updated.designer.threadId).toMatch(/^native-thread-/);
