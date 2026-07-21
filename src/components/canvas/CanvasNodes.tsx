@@ -56,7 +56,7 @@ function AgentNodeView({ data, selected }: NodeProps<AgentFlowNode>) {
       </div>
       <div className="loop-celestial-caption">
         <strong>{agent.name}</strong>
-        <span><i className={`loop-status-dot loop-status-dot-${agent.status}`} aria-hidden="true" />{agent.kind === "agent" ? celestial.label : agent.kind}</span>
+        <span><i className={`loop-status-dot loop-status-dot-${agent.status}`} aria-hidden="true" />{agent.kind}</span>
       </div>
       <Handle className="loop-port loop-port-output" type="source" position={Position.Right} />
 

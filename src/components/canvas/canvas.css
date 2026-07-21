@@ -10,7 +10,10 @@
   background: var(--surface);
 }
 .loop-workspace-canvas.is-readonly { grid-template-columns: minmax(0, 1fr); }
-.loop-workspace-canvas.is-readonly .loop-port { display: none; }
+.loop-workspace-canvas.is-readonly .loop-port {
+  visibility: hidden;
+  pointer-events: none;
+}
 
 .loop-mobile-inspector-close { display: none; }
 

@@ -33,6 +33,7 @@ describe("persistent Loop Designer", () => {
     const draft = await store.addWorkflow(createBlankWorkflow());
     const proposal = {
       response: "I created a bounded implementation and verification Loop.",
+      modelAssessment: "Terra is a sensible implementation choice, while Sol is justified for the final high-effort verification. The graph stays within its token ceiling. Sol costs 125/12.5/750 credits per 1M input/cached/output tokens, Terra 62.5/6.25/375, and Luna 25/2.5/150; actual usage varies by run.",
       name: "Ship and verify",
       objective: "Implement the requested change and prove it works.",
       assumptions: ["The current repository is the target."],
@@ -64,6 +65,8 @@ describe("persistent Loop Designer", () => {
     expect(updated.designer.state).toBe("idle");
     expect(updated.designer.assumptions).toEqual(proposal.assumptions);
     expect(updated.designer.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(updated.designer.messages.at(-1)?.content).toContain("Model selection\nTerra is a sensible implementation choice");
+    expect(updated.designer.messages.at(-1)?.content).toContain("Sol costs 125/12.5/750");
     expect(updated.validationIssues.some((issue) => issue.severity === "error")).toBe(false);
   });
 });

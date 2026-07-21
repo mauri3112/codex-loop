@@ -37,6 +37,7 @@ interface ProposalStep {
 
 interface DesignerProposal {
   response: string;
+  modelAssessment: string;
   name: string;
   objective: string;
   assumptions: string[];
@@ -59,9 +60,10 @@ interface PendingTurn {
 const proposalSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["response", "name", "objective", "assumptions", "questions", "steps", "secretRequirements", "supervisorModel", "budgets"],
+  required: ["response", "modelAssessment", "name", "objective", "assumptions", "questions", "steps", "secretRequirements", "supervisorModel", "budgets"],
   properties: {
     response: { type: "string" },
+    modelAssessment: { type: "string" },
     name: { type: "string" },
     objective: { type: "string" },
     assumptions: { type: "array", items: { type: "string" } },
@@ -229,7 +231,11 @@ export class CodexLoopDesigner implements LoopDesignerService {
       draft.designer.state = proposal.questions.length ? "waiting-input" : "idle";
       draft.designer.assumptions = proposal.assumptions;
       draft.designer.pendingQuestions = proposal.questions;
-      draft.designer.messages.push({ id: makeId("designer-assistant"), role: "assistant", content: proposal.response, timestamp: now(), status: "complete", mutationId });
+      const modelAssessment = proposal.steps.length
+        ? proposal.modelAssessment.trim() || fallbackModelAssessment(proposal)
+        : "";
+      const content = [proposal.response.trim(), modelAssessment ? `Model selection\n${modelAssessment}` : ""].filter(Boolean).join("\n\n");
+      draft.designer.messages.push({ id: makeId("designer-assistant"), role: "assistant", content, timestamp: now(), status: "complete", mutationId });
     });
   }
 
@@ -296,6 +302,8 @@ function buildDesignerPrompt(workflow: Workflow, message: string, capabilities: 
     "Update the Loop in response to the user's message.",
     "Return the complete desired step list, not a patch. Preserve useful existing work unless the user asks to replace it.",
     "Return both the primary and retry-upgrade model for every step, plus the supervisor recovery model. When the user asks to replace a model, update every matching primary, retry, and supervisor assignment.",
+    "For every non-empty graph, put a concise user-facing assessment in modelAssessment. Judge whether each selected model and reasoning effort is sensible for its step complexity; explain likely token-use drivers from context, reasoning effort, fan-out, retries, and the token budget; and suggest a cheaper or stronger alternative when warranted.",
+    "Always compare all three model costs in modelAssessment using the current Codex credit rate per 1M tokens: Sol = 125 input / 12.5 cached input / 750 output credits; Terra = 62.5 / 6.25 / 375; Luna = 25 / 2.5 / 150. These are credits, not currency. Say that actual usage depends on the run and that rates may change; point to https://learn.chatgpt.com/docs/pricing. If steps is empty, return an empty modelAssessment.",
     "Use capabilities only when they are available. If access is missing, describe setup in questions or assumptions; never request a credential value.",
     "Every loop must have measurable verification, a bounded stop condition for repeating work, and conservative budgets.",
     `User message:\n${message}`,
@@ -391,7 +399,7 @@ function compileProposal(workflow: Workflow, proposal: DesignerProposal, capabil
 
 function parseProposal(output: string): DesignerProposal {
   const value = JSON.parse(output) as Partial<DesignerProposal> & { budgets?: Record<string, unknown> | null };
-  if (!value || typeof value.response !== "string" || !Array.isArray(value.steps) || !Array.isArray(value.questions) || !Array.isArray(value.assumptions) || !Array.isArray(value.secretRequirements)) {
+  if (!value || typeof value.response !== "string" || typeof value.modelAssessment !== "string" || !Array.isArray(value.steps) || !Array.isArray(value.questions) || !Array.isArray(value.assumptions) || !Array.isArray(value.secretRequirements)) {
     throw new Error("Loop Designer returned an invalid structured proposal");
   }
   const steps = value.steps.map((step) => ({
@@ -404,6 +412,19 @@ function parseProposal(output: string): DesignerProposal {
     ? Object.fromEntries(Object.entries(value.budgets).filter(([, item]) => item !== null)) as Partial<Workflow["budgets"]>
     : undefined;
   return { ...(value as DesignerProposal), steps, budgets };
+}
+
+function fallbackModelAssessment(proposal: DesignerProposal): string {
+  const counts = new Map<AgentModel, number>([["Sol", 0], ["Terra", 0], ["Luna", 0]]);
+  for (const step of proposal.steps) counts.set(step.model, (counts.get(step.model) ?? 0) + 1);
+  const selected = (["Sol", "Terra", "Luna"] as const)
+    .flatMap((model) => counts.get(model) ? [`${counts.get(model)} ${model}`] : [])
+    .join(", ");
+  const maximumTokens = proposal.budgets?.maximumTokens;
+  const tokenBudget = typeof maximumTokens === "number"
+    ? `The run is capped at ${maximumTokens.toLocaleString()} tokens.`
+    : "The proposal has no explicit token ceiling, so add one if spend must be bounded.";
+  return `The graph uses ${selected || "no primary worker models"}. Sol is the highest-capability and highest-cost tier, Terra balances capability and cost, and Luna is the lowest-cost tier for clear repeatable work. Token use will grow with supplied context, reasoning effort, tool results, fan-out, and retries. ${tokenBudget} Current Codex rates per 1M tokens are Sol 125 input / 12.5 cached / 750 output credits, Terra 62.5 / 6.25 / 375, and Luna 25 / 2.5 / 150. Actual usage varies by run and rates may change; see https://learn.chatgpt.com/docs/pricing.`;
 }
 
 export function validateStrictObjectSchemas(schema: unknown, context = "schema"): void {

@@ -1,36 +1,52 @@
 # Codex Loop
 
-A local, chat-first control plane for reusable Codex workflows. Describe the outcome to the 5.6-Sol Loop Designer; it creates and revises a versioned execution graph, validates it, discovers available skills/apps/MCP/CLI capabilities, and leaves full visual editing behind an explicit **Edit visually** control.
+Codex Loop is a local, chat-first control plane for designing, running, and supervising reusable Codex workflows. Describe an outcome to the persistent Loop Designer; it turns the request into a validated, versioned execution graph and keeps the full graphical editor behind an explicit **Edit visually** action.
 
-## Run locally
+![Codex Loop designing and running a workflow](docs/codex-loop-demo.gif)
+
+## What it provides
+
+- Chat-first graph creation and revision through a read-only GPT-5.6 Sol Designer thread.
+- A read-only graph preview plus a graphical editor for nodes, dependencies, budgets, retries, capabilities, context access, and supervisor behavior.
+- Agent, map, join, condition, loop, verify, gate, and subworkflow orchestration nodes.
+- Per-node Sol, Terra, or Luna selection, reasoning effort, retry upgrades, and a post-design assessment of model fit, expected token-use drivers, and current Codex credit costs.
+- Live discovery of available Codex skills, apps, MCP servers, Computer Use, and supported CLI capabilities.
+- Native Codex threads backed by `codex app-server`, including streamed messages, tool calls, file changes, approvals, user-input requests, token usage, and status updates.
+- One-time, scheduled, and webhook-triggered runs; immutable run history; simulation; interventions; checkpoints; bounded retries; and no-progress detection.
+- Durable JSON storage and Docker packaging for a local workstation or trusted home server.
+- An authenticated Streamable HTTP MCP surface plus packaged `design-loop` and `operate-loop` skills for controlling Loop from another Codex task.
+
+## How it works
+
+The browser is an operator interface, not a Codex credential holder. The Express server owns the authenticated `codex app-server` subprocess and exposes narrow workflow and thread operations to the UI. Each graph node maps to a persisted native Codex thread. Loop owns dependency scheduling, budgets, checkpoints, capability bindings, context routing, gates, and supervision; Codex owns the reasoning and tool-use loop inside each worker.
+
+The Designer returns schema-constrained proposals. Loop compiles each complete proposal into a new workflow revision, validates it, records the mutation, and shows assumptions or up to three consequential questions. Creating or revising a graph also produces a model-selection assessment that explains:
+
+- whether each model and reasoning effort matches the task complexity;
+- how context, reasoning effort, graph fan-out, tools, retries, and the token ceiling affect usage;
+- the comparative Codex credit rates for Sol, Terra, and Luna; and
+- when a cheaper or stronger model would be a better tradeoff.
+
+Credit rates can change, so the Designer points users to the [current Codex pricing page](https://learn.chatgpt.com/docs/pricing). Actual run cost depends on the input, cached input, output, reasoning, tools, and retries consumed by that run.
+
+## Quick start from source
+
+Prerequisites:
+
+- Node.js 22 and npm.
+- A current Codex CLI available as `codex`.
+- An authenticated local Codex session (`codex login status`).
+- A repository or projects directory that workers may use as their workspace.
 
 ```bash
-npm install
+npm ci
 codex login status
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. The API runs on `http://127.0.0.1:4317`, launches `codex app-server` lazily for the Designer or a real run, and persists versioned Loop definitions, native Codex thread IDs, and immutable per-run execution results to `data/codex-loop.json`.
+Open `http://127.0.0.1:5173`. Vite proxies API requests to `http://127.0.0.1:4317` during development.
 
-Prerequisites:
-
-- A current Codex CLI available as `codex`.
-- An authenticated local Codex session (`codex login status`).
-- A repository working directory. By default agents work in the directory where the server starts.
-
-Optional runtime overrides:
-
-```bash
-CODEX_BINARY=/absolute/path/to/codex
-CODEX_LOOP_WORKSPACE=/absolute/path/to/repository
-CODEX_LOOP_MODEL=gpt-5.4
-CODEX_LOOP_DESIGNER_MODEL=gpt-5.6-sol
-CODEX_LOOP_SANDBOX=workspace-write # read-only | workspace-write | danger-full-access
-CODEX_LOOP_PUBLIC_URL=http://127.0.0.1:4317
-CODEX_LOOP_MCP_TOKEN=a-long-random-value
-```
-
-Production build and verification:
+For a production-style source run:
 
 ```bash
 npm run build
@@ -38,17 +54,114 @@ npm test
 npm start
 ```
 
-## Always-current home-server deployment
+Open `http://127.0.0.1:4317` after the build. The server serves the compiled interface and API from the same origin.
 
-Every successful push to `main` runs tests and a production build, publishes a
-multi-architecture image to GitHub Container Registry, and creates a matching
-GitHub release named `v1.0.<workflow-run-number>`. The `latest` image always
-points to that release.
+For the simplest agent-oriented local container build, follow [build.md](build.md). That guide builds and runs one local Docker image and intentionally excludes release tagging, GHCR, Watchtower, Caddy, and home-server setup.
 
-This Mac runs the published image through Docker Compose. The scoped updater
-checks GHCR every five minutes and recreates only the Codex Loop container when
-a new healthy image is available. Workflow data, the Codex home, and the mounted
-projects workspace remain on the host across updates.
+## Designing a Loop
+
+1. Open **Loop** and create a blank Loop or start from a template.
+2. Describe the outcome in the Designer chat.
+3. Review the graph, the Designer response, model/cost assessment, assumptions, setup requirements, and validation issues.
+4. Refine the graph in chat, or choose **Edit visually** to change it directly.
+5. Simulate the Loop for a non-persisted, read-only readiness report.
+6. Save and publish a valid revision, configure its trigger, and run it.
+
+Visual edits support node creation and deletion, connection management, drag positioning, orchestration settings, model and effort selection, retry policy, task capability autocomplete, context visibility, secrets-by-reference, run budgets, and supervisor escalation policy. Secret values do not belong in a Loop definition.
+
+## Node kinds
+
+| Kind | Purpose |
+| --- | --- |
+| `agent` | Run one bounded Codex worker task. |
+| `map` | Fan out independent work over a collection within concurrency and total-agent budgets. |
+| `join` | Wait for upstream branches and synthesize their results. |
+| `condition` | Select supported outgoing routes from evidence. |
+| `loop` | Repeat until a declared stop condition or iteration limit is reached. |
+| `verify` | Independently test or challenge upstream claims against a rubric. |
+| `gate` | Require explicit human approval before continuing. |
+| `subworkflow` | Invoke another saved Loop as a bounded child workflow. |
+
+## Run modes
+
+- **Simulate** validates the dependency plan and produces a generic preview. It performs only read-only workspace and capability/authentication probes; it does not create threads, run tools, modify files, or persist a run.
+- **Run once** starts a saved Loop with an optional one-time prompt and working directory. It does not overwrite the configured scheduled or webhook trigger.
+- **Scheduled run** starts on selected weekdays and times in an IANA time zone. The coordinator prevents duplicate starts for the same scheduled minute.
+- **Webhook run** exposes a tokenized `GET` or `POST` endpoint at `/api/triggers/:token`. Query values or a JSON object are merged with configured defaults and made available to the run.
+
+Each run freezes its thread messages, tool calls, file changes, final outputs, checkpoints, token use, and audit events. The operator can pause, resume, stop, answer native user-input requests, resolve gates, steer active work, queue follow-ups, or inject curated context. Token ceilings and maximum no-progress rounds stop unbounded work.
+
+## Models and token use
+
+Loop uses the short names **Sol**, **Terra**, and **Luna** in workflow definitions:
+
+- **Sol** is the highest-capability and highest-cost option for ambiguous, difficult, or high-value work.
+- **Terra** balances reasoning quality and cost for everyday implementation and tool use.
+- **Luna** is the lowest-cost option for clear, repeatable, high-volume tasks.
+
+Reasoning effort is configured separately. Use the lowest effort that reliably satisfies the node’s definition of done; higher effort, larger context, verbose tool results, fan-out, retries, and long outputs can all increase token consumption. Loop tracks native `thread/tokenUsage/updated` events against an optional workflow token ceiling.
+
+## Persistence and security
+
+By default, workflow definitions, native thread mappings, mutations, run records, and execution evidence live in `data/codex-loop.json`. Keep `data/` persistent when replacing a container. The Docker setup also mounts the host Codex home and workspace instead of baking credentials or user data into the image.
+
+Codex Loop can launch native Codex workers that read and modify the mounted workspace according to `CODEX_LOOP_SANDBOX`. It has no built-in public-user authentication for the web interface. Keep it on a trusted local machine, LAN, or private network. Do not expose it to the public internet without adding authentication and TLS, and never commit `.env`, Codex credentials, tokens, secrets, or workflow state.
+
+## Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `HOST` | `127.0.0.1` | API/UI bind address. The container sets `0.0.0.0`. |
+| `PORT` | `4317` | API/UI port. |
+| `CODEX_BINARY` | `codex` | Codex CLI executable path. |
+| `CODEX_LOOP_WORKSPACE` | server working directory | Default repository or workspace for Designer inspection and worker runs. |
+| `CODEX_LOOP_MODEL` | Codex default | Optional native worker model override. |
+| `CODEX_LOOP_DESIGNER_MODEL` | `gpt-5.6-sol` | Persistent Designer model. |
+| `CODEX_LOOP_SANDBOX` | `workspace-write` | Worker sandbox: `read-only`, `workspace-write`, or `danger-full-access`. |
+| `CODEX_LOOP_PUBLIC_URL` | `http://127.0.0.1:4317` | Base URL used in generated deep links. |
+| `CODEX_LOOP_MCP_TOKEN` | empty | Bearer token required by `/mcp` when configured. |
+| `CODEX_LOOP_SUPERVISOR_INTERVAL_MS` | internal default | Attention-supervisor polling interval. |
+| `CODEX_LOOP_STALL_THRESHOLD_MS` | internal default | Age threshold for stalled-work attention. |
+
+Container-only path variables in `.env.example` map the host Codex home and workspace into the published Compose deployment.
+
+## HTTP and MCP surfaces
+
+Important health and integration routes include:
+
+- `GET /api/health` — liveness (`{"status":"ok"}`).
+- `GET /api/version` — build version, Git revision, and build timestamp.
+- `GET /api/bridge/status` — native Codex bridge state.
+- `GET /api/task-capabilities` — normalized live capability inventory.
+- `/api/workflows/...` — workflow, revision, validation, Designer, run, simulation, thread, attention, and intervention operations.
+- `GET|POST /api/triggers/:token` — published webhook triggers.
+- `POST /mcp` — Streamable HTTP MCP endpoint, protected by `CODEX_LOOP_MCP_TOKEN` when set.
+
+The repository contains `plugins/codex-loop` with two skills:
+
+- `design-loop` creates, clarifies, revises, validates, and explicitly publishes definitions.
+- `operate-loop` inspects runs and performs only explicitly requested start, pause, resume, stop, or gate actions.
+
+Install that plugin through a local Codex plugin marketplace, configure its MCP URL, and export the same `CODEX_LOOP_MCP_TOKEN` on both sides. For the home-server deployment, use `http://codex-loop.home/mcp`.
+
+## Local validation
+
+Run the repository checks before committing:
+
+```bash
+npm test
+npm run build
+docker build -t codex-loop:local .
+docker compose config
+```
+
+For deployment changes, also verify `/api/health`, `/api/version`, and `scripts/check-latest-release.sh` against the live route. A build pass alone does not prove the rendered graph and editor interactions; visually check the affected flow at desktop and mobile sizes.
+
+## Release and home-server deployment
+
+Every successful push to `main` is a release event. `.github/workflows/release.yml` runs tests and the production build, publishes multi-architecture `ghcr.io/mauri3112/codex-loop:latest` and immutable `v1.0.<run-number>` images, and creates the matching GitHub release.
+
+The repository’s `docker-compose.yml` is the always-current home-server deployment, not the minimal local build path. It joins the external `home-server-proxy` network and runs a label-scoped Watchtower updater every five minutes. Runtime data, the host Codex home, and the mounted projects workspace survive image replacement.
 
 ```bash
 cp .env.example .env
@@ -58,77 +171,24 @@ docker compose up -d
 ./scripts/check-latest-release.sh
 ```
 
-The LAN route is `http://codex-loop.home`; release metadata is available at
-`http://codex-loop.home/api/version`, and the authenticated Streamable HTTP MCP
-endpoint is `http://codex-loop.home/mcp`. Caddy, DNS, and landing-page configuration
-live in the sibling `home-server-setup` repository.
+The LAN route is `http://codex-loop.home`; version metadata is at `http://codex-loop.home/api/version`. Caddy routing, LAN DNS, the landing page, and operator documentation belong to the sibling `/Users/mauri-home/Documents/projects/home-server-setup` repository. Any route, container, network, port, or deployment-procedure change must be kept aligned there.
 
-The default deployment mounts `/Users/mauri-home/.codex` and
-`/Users/mauri-home/Documents/projects`. Adjust `.env` on a different host. This
-is a powerful control surface that can launch Codex against the mounted
-workspace, so keep it on a trusted LAN and do not expose it to the public
-internet without authentication and TLS.
+## Repository map
 
-## Documentation
+- `src/components` — chat, canvas, editor, run control, history, activity, and intervention UI.
+- `src/domain` — workflow types, normalization, validation, simulation, context, and model helpers.
+- `server` — Express API, persistence, Designer, Codex bridge, run coordinator, supervisor, simulation, triggers, and MCP.
+- `plugins/codex-loop` — packaged Loop design and operation skills.
+- `docs` — architecture, parity, attention, and intervention notes plus the README demo.
+- `scripts` — bridge and release/runtime verification helpers.
+- `build.md` — minimal local Docker build and run instructions for an agent.
 
-- [Claude Code workflow parity](docs/claude-code-workflow-parity.md) explains what Loop borrows from Claude Code, the higher-level abstraction boundary, and the remaining parity gaps.
-- [Attention and intervention](docs/attention-and-intervention.md) documents native user-input handling, proactive guardrails, operator semantics, security invariants, and the prioritized follow-up backlog.
+## Additional documentation
 
-## Create Loops from a Codex task
-
-The repository includes a validated plugin in `plugins/codex-loop` with two skills:
-
-- `design-loop` creates, clarifies, revises, validates, and explicitly publishes Loop definitions.
-- `operate-loop` inspects runs and performs only explicitly requested start, pause, resume, stop, or gate actions.
-
-The plugin connects to the `/mcp` endpoint. Its default URL targets the local development server at `127.0.0.1:4317`; for the home-server deployment, change the plugin MCP URL to `http://codex-loop.home/mcp`. Export the same `CODEX_LOOP_MCP_TOKEN` value in the Codex host environment and the Compose `.env`. Secret values never enter a Loop definition: the Designer records named secret requirements and reuses already-authenticated capabilities by reference.
-
-Once installed through a local Codex plugin marketplace, start a new Codex task and ask: “Use `$design-loop` to create a Loop that …”. The skill creates a draft, delegates graph compilation to the persistent Designer, validates it, and returns a deep link. It does not publish or start the Loop unless explicitly requested.
-
-## Run modes
-
-The split run control keeps one-time execution separate from the configured automatic trigger:
-
-- **Simulate** works for draft and saved Loops. It validates the dependency plan, previews plausible thread procedures and outputs, checks workspace readability, and probes capability/authentication status using list/status operations only. It never creates or archives a thread, runs a worker tool, changes a file, or persists a run.
-- **Run once** is always available for a saved Loop and opens a dialog for an optional one-time prompt and project folder. It does not replace a configured schedule or webhook.
-- **Scheduled run** starts automatically on selected weekdays and times in the configured IANA time zone. The server checks due schedules every 15 seconds and prevents duplicate starts within the same scheduled minute.
-- **Webhook run** exposes a tokenized `GET`/`POST` endpoint at `/api/triggers/:token`. A JSON POST body or GET query values are merged with configured defaults and made available to every Agent in that run.
-
-The Loop sidebar marks each Loop with a color for its configured trigger type. Expanding the active Loop shows its threads and execution history; every new run freezes thread messages, tool calls, file changes, final outputs, and audit events so later runs cannot overwrite earlier evidence.
-
-In development, copy the trigger URL shown in the dialog (normally port `5173`, proxied to the API). With `npm start`, the UI and trigger endpoint share the API origin (normally port `4317`). To accept calls beyond the local machine, start the server with an appropriate `HOST` value and network controls.
-
-## Demo flow
-
-1. Select **Loop**, describe the desired outcome, and let the Designer propose the initial graph.
-2. Continue in chat to add constraints, change integrations, or refine verification. Inspect assumptions, questions, setup requirements, and validation beside the graph preview.
-3. Select **Edit visually** only when you want direct node, edge, Context Block, or Observer controls.
-4. Select **Simulate** to inspect the staged execution preview and read-only access checks. Resolve blocking findings before real execution.
-5. Save the validated revision explicitly, then run it once, schedule recurring starts, or activate a webhook trigger.
-6. Follow context creation and access grants in the Activity and Contexts panes.
-7. Watch real assistant messages, commands, MCP calls, approvals, file changes, failures, and retries stream into the workflow.
-8. Open **Implement the change** to audit its native Codex thread ID, received context, attempts, tool calls, file changes, and final output. The persisted thread is also available to other Codex clients using the same `CODEX_HOME`.
-9. Return to Loop, open a prior run from the sidebar to inspect its frozen results, then save, reload, and reopen the workflow.
-
-Loop schedules nodes whose incoming dependencies have completed. Independent root nodes start in parallel. Pause prevents new nodes from starting, stop interrupts active Codex turns, and reset archives the native threads without deleting their stored execution results. Starting another run creates fresh native threads so outputs remain isolated by execution.
-
-## Architecture
-
-- React, TypeScript, Vite, and `@xyflow/react` for the application and canvas.
-- Express API with serialized atomic JSON-file persistence and a server-side Codex bridge.
-- Versioned workflow definitions and mutation history with optimistic revision locking, validation, undo-as-a-new-revision, draft/published lifecycle, and immutable audit events.
-- A persistent read-only 5.6-Sol Designer thread that emits schema-constrained proposals compiled into graph revisions.
-- An authenticated MCP control surface and packaged `design-loop` / `operate-loop` skills for creation from any Codex task.
-- Bounded agent, map, join, condition, loop, verify, gate, and subworkflow execution semantics with budgets and checkpoints.
-- `codex app-server` over JSONL/stdin/stdout for native thread creation, resumption, turns, steering, interruption, approval responses, and streamed events.
-- Persistent mappings from Loop thread records to native Codex thread and active turn IDs.
-- Vitest coverage for API persistence, graph scheduling, native event projection, and approval routing through a fake app-server process.
-
-## Bridge boundary
-
-The browser never launches Codex directly and never receives Codex credentials. Express owns the authenticated app-server subprocess and exposes narrow workflow/thread endpoints to the UI. Each Agent node is mapped to a persisted native Codex thread; `turn/start`, `turn/steer`, and `turn/interrupt` drive real work, while app-server notifications update Loop's messages, tool calls, file changes, attempts, statuses, and audit events.
-
-The deterministic reference scenario remains in `src/domain/simulation.ts`. The operator-facing simulation endpoint is separate: it builds a generic, non-persisted report for the current Loop and performs only read-only workspace and capability/authentication probes. Start/Stop/Continue controls use the native bridge for real execution.
+- [Local Docker build](build.md)
+- [Claude Code workflow parity](docs/claude-code-workflow-parity.md)
+- [Attention and intervention](docs/attention-and-intervention.md)
+- [Original product brief](codex_loop.md)
 
 ## License
 
