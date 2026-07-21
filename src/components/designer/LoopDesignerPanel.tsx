@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { AlertTriangle, CheckCircle2, KeyRound, RotateCcw, Send, Sparkles, Unplug } from "lucide-react";
 import type { Workflow } from "../../domain/types";
 import { SlashAutocompleteTextArea } from "../ui/SlashAutocompleteTextArea";
+import { shouldSubmitComposer } from "../ui/composer-keyboard";
 import "./designer.css";
 
 export function LoopDesignerPanel({ workflow, sending, onSend, onUndo }: {
@@ -70,7 +71,7 @@ export function LoopDesignerPanel({ workflow, sending, onSend, onUndo }: {
           rows={3}
           placeholder="Create or update this Loop…"
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+            if (shouldSubmitComposer(event)) {
               event.preventDefault();
               event.currentTarget.form?.requestSubmit();
             }

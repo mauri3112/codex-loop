@@ -9,6 +9,7 @@ import { JsonWorkflowStore, WorkflowNotFoundError, WorkflowRevisionConflictError
 import { BridgeConflictError, BridgeInputError, BridgeResourceNotFoundError, CodexBridge, type CodexBridgeService } from "./codex-bridge.js";
 import { CodexLoopDesigner, type LoopDesignerService } from "./loop-designer.js";
 import { handleMcpRequest } from "./mcp.js";
+import { simulateWorkflow } from "./simulation.js";
 
 const generateSchema = z.object({ task: z.string().trim().min(1).max(12_000) });
 const instructionSchema = z.object({ instruction: z.string().trim().min(1).max(12_000) });
@@ -19,6 +20,9 @@ const gateDecisionSchema = z.object({ decision: z.enum(["approve", "decline"]) }
 const runActionSchema = z.enum(["start", "pause", "resume", "stop", "reset"]);
 const singleRunOptionsSchema = z.object({
   additionalPrompt: z.string().trim().max(12_000).optional(),
+  workingDirectory: z.string().trim().max(4_096).optional(),
+});
+const simulationOptionsSchema = z.object({
   workingDirectory: z.string().trim().max(4_096).optional(),
 });
 const runConfigurationSchema = z.object({
@@ -274,6 +278,15 @@ export function createApp(
     asyncRoute(async (request, response) => {
       const mutationId = z.object({ mutationId: z.string().min(1).optional() }).parse(request.body ?? {}).mutationId;
       response.json(await store.undoWorkflowMutation(String(request.params.id), mutationId));
+    }),
+  );
+
+  app.post(
+    "/api/workflows/:id/simulate",
+    asyncRoute(async (request, response) => {
+      const options = simulationOptionsSchema.parse(request.body ?? {});
+      const workflow = await store.getWorkflow(String(request.params.id));
+      response.json(await simulateWorkflow(workflow, bridge, options));
     }),
   );
 

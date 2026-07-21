@@ -17,7 +17,7 @@ export interface BridgeStatus {
 export interface CodexBridgeService {
   status(): BridgeStatus;
   connect(): Promise<BridgeStatus>;
-  listTaskCapabilities?(): Promise<TaskCapabilitiesResponse>;
+  listTaskCapabilities?(workingDirectory?: string): Promise<TaskCapabilitiesResponse>;
   startWorkflow(workflowId: string, invocation?: RunInvocation): Promise<Workflow>;
   pauseWorkflow(workflowId: string): Promise<Workflow>;
   resumeWorkflow(workflowId: string): Promise<Workflow>;
@@ -147,11 +147,11 @@ export class CodexBridge implements CodexBridgeService {
     return { ...this.bridgeStatus };
   }
 
-  async listTaskCapabilities(): Promise<TaskCapabilitiesResponse> {
-    await this.connect();
+  async listTaskCapabilities(workingDirectory = process.cwd()): Promise<TaskCapabilitiesResponse> {
+    await this.connectReadOnly();
     const warnings: string[] = [];
     const [skillsResult, mcpResult, appsResult, githubCliResult] = await Promise.allSettled([
-      this.client.request<SkillsListResponse>("skills/list", { cwds: [process.cwd()] }),
+      this.client.request<SkillsListResponse>("skills/list", { cwds: [workingDirectory] }),
       this.client.request<McpServerStatusResponse>("mcpServerStatus/list", { detail: "toolsAndAuthOnly", limit: 100 }),
       this.client.request<AppListResponse>("app/list", { limit: 100 }),
       execFileAsync("gh", ["auth", "status"], { timeout: 5_000, env: scrubbedCapabilityProbeEnvironment() }),
@@ -220,10 +220,20 @@ export class CodexBridge implements CodexBridgeService {
   }
 
   async connect(): Promise<BridgeStatus> {
+    await this.prepareRuntime();
+    return this.connectReadOnly();
+  }
+
+  async prepareRuntime(): Promise<void> {
+    if (this.runtimePrepared) return;
+    await this.expireStaleInputRequests();
+    this.runtimePrepared = true;
+  }
+
+  private async connectReadOnly(): Promise<BridgeStatus> {
     if (this.bridgeStatus.state === "connected") return this.status();
     this.bridgeStatus = { state: "connecting" };
     try {
-      await this.prepareRuntime();
       await this.client.connect();
       this.bridgeStatus = { state: "connected" };
     } catch (error) {
@@ -231,12 +241,6 @@ export class CodexBridge implements CodexBridgeService {
       throw error;
     }
     return this.status();
-  }
-
-  async prepareRuntime(): Promise<void> {
-    if (this.runtimePrepared) return;
-    await this.expireStaleInputRequests();
-    this.runtimePrepared = true;
   }
 
   async startWorkflow(workflowId: string, invocation: RunInvocation = { source: "manual" }): Promise<Workflow> {

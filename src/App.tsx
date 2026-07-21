@@ -9,10 +9,12 @@ import { LoopDesignerPanel } from "./components/designer/LoopDesignerPanel";
 import { AttentionBanner, InterventionDrawer } from "./components/intervention/InterventionCenter";
 import { RunControl } from "./components/run/RunControl";
 import { RunHistoryView } from "./components/run/RunHistoryView";
+import { SimulationControl } from "./components/run/SimulationControl";
 import { CodexShell, type ShellSection } from "./components/shell/CodexShell";
 import { AgentThreadView } from "./components/thread/AgentThreadView";
 import { Button } from "./components/ui/Button";
 import type { AppData, Selection, SingleRunOptions, Workflow, WorkflowRunConfiguration } from "./domain/types";
+import type { SimulationOptions, WorkflowSimulationReport } from "./domain/simulation-report";
 import "./styles/app.css";
 
 function sectionForPath(pathname: string): ShellSection {
@@ -40,6 +42,7 @@ interface WorkspaceProps {
   onChange: (workflow: Workflow) => void;
   onSave: (workflow: Workflow) => Promise<void>;
   onRunAction: (workflow: Workflow, action: "start" | "pause" | "resume" | "stop" | "reset", options?: SingleRunOptions) => Promise<void>;
+  onSimulate: (workflow: Workflow, options?: SimulationOptions) => Promise<WorkflowSimulationReport>;
   onDelete: (workflow: Workflow) => Promise<void>;
   onConfigureRun: (workflow: Workflow, configuration: WorkflowRunConfiguration) => Promise<void>;
   onIntervene: (workflow: Workflow, input: CreateInterventionInput) => Promise<void>;
@@ -51,7 +54,7 @@ interface WorkspaceProps {
   onGateDecision: (workflow: Workflow, nodeId: string, decision: "approve" | "decline") => Promise<void>;
 }
 
-function Workspace({ data, onChange, onSave, onRunAction, onDelete, onConfigureRun, onIntervene, onRespondToAttention, onOpenThread, onDesignerMessage, onUndo, designerSending, onGateDecision }: WorkspaceProps) {
+function Workspace({ data, onChange, onSave, onRunAction, onSimulate, onDelete, onConfigureRun, onIntervene, onRespondToAttention, onOpenThread, onDesignerMessage, onUndo, designerSending, onGateDecision }: WorkspaceProps) {
   const { workflowId = "" } = useParams();
   const navigate = useNavigate();
   const workflow = data.workflows.find((item) => item.id === workflowId);
@@ -66,6 +69,7 @@ function Workspace({ data, onChange, onSave, onRunAction, onDelete, onConfigureR
   if (!workflow) return <main className="workflow-missing"><h1>Workflow not found</h1><button onClick={() => navigate("/loop")}>Return to Loop</button></main>;
 
   const run = workflow.runs.at(-1);
+  const runInactive = !run || ["stopped", "completed"].includes(run.status);
   const completed = workflow.nodes.filter((node) => node.status === "completed").length;
   const progress = workflow.nodes.length ? Math.round(workflow.nodes.reduce((sum, node) => sum + node.progress, 0) / workflow.nodes.length) : 0;
   const openAttentionRequests = workflow.attentionRequests.filter((request) => request.status === "open");
@@ -85,7 +89,8 @@ function Workspace({ data, onChange, onSave, onRunAction, onDelete, onConfigureR
         <div className="workspace-identity"><h1>{workflow.name}</h1>{workflow.status === "running" ? <span className="loop-runtime-pill"><LoaderCircle size={11} />Loop running{activeAgents ? ` · ${activeAgents} active` : ""}</span> : <span className={`workflow-state state-${workflow.status}`}>{workflow.status}</span>}</div>
         <div className="workspace-progress" aria-label={`${progress}% workflow progress`}><span><i style={{ width: `${progress}%` }} /></span><small>{completed}/{workflow.nodes.length} complete</small></div>
         <div className="workspace-controls">
-          {!run || ["stopped", "completed"].includes(run.status) ? <RunControl configuration={workflow.runConfiguration} onStart={(options) => runAction("start", options)} onSave={(configuration) => onConfigureRun(workflow, configuration)} disabled={workflow.lifecycle !== "published"} /> : run.status === "paused" ? <button className="run-primary" onClick={() => void runAction("resume")}><Play size={14} /> Resume</button> : <button onClick={() => void runAction("pause")}><Pause size={14} /> Pause</button>}
+          {runInactive ? <SimulationControl onSimulate={(options) => onSimulate(workflow, options)} /> : null}
+          {runInactive ? <RunControl configuration={workflow.runConfiguration} onStart={(options) => runAction("start", options)} onSave={(configuration) => onConfigureRun(workflow, configuration)} disabled={workflow.lifecycle !== "published"} /> : run?.status === "paused" ? <button className="run-primary" onClick={() => void runAction("resume")}><Play size={14} /> Resume</button> : <button onClick={() => void runAction("pause")}><Pause size={14} /> Pause</button>}
           {run && ["running", "paused"].includes(run.status) && <button onClick={() => void runAction("stop")} title="Stop workflow"><CircleStop size={14} /><span>Stop</span></button>}
           <button className={openAttentionRequests.length > 0 ? "intervene-control has-attention" : "intervene-control"} onClick={() => { setInitialAttentionId(undefined); setInterventionOpen(true); }} title="Intervene in this run"><MessageSquareMore size={14} /><span>Intervene</span>{openAttentionRequests.length > 0 ? <i>{openAttentionRequests.length}</i> : null}</button>
           <button onClick={() => void runAction("reset")} title="Reset workflow"><RotateCcw size={14} /><span>Reset</span></button>
@@ -190,6 +195,7 @@ export function App() {
   const runAction = async (workflow: Workflow, action: "start" | "pause" | "resume" | "stop" | "reset", options?: SingleRunOptions) => {
     try { replaceWorkflow(await api.runAction(workflow.id, action, options)); } catch (reason) { setError(reason instanceof Error ? reason.message : `Could not ${action} workflow`); throw reason; }
   };
+  const simulate = (workflow: Workflow, options?: SimulationOptions) => api.simulate(workflow.id, options);
   const deleteWorkflow = async (workflow: Workflow) => {
     try {
       await api.deleteWorkflow(workflow.id);
@@ -260,7 +266,7 @@ export function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/loop" replace />} />
         <Route path="/loop" element={<LoopLanding generating={generating} recentWorkflows={data.workflows.filter((workflow) => workflow.lifecycle === "draft").map((workflow) => ({ id: workflow.id, name: workflow.name, description: workflow.mainTask, status: workflow.status, updatedLabel: new Date(workflow.updatedAt).toLocaleDateString(), nodeCount: workflow.nodes.length }))} savedWorkflows={data.workflows.filter((workflow) => workflow.lifecycle === "published").map((workflow) => ({ id: workflow.id, name: workflow.name, description: workflow.mainTask, status: workflow.status, updatedLabel: new Date(workflow.updatedAt).toLocaleDateString(), nodeCount: workflow.nodes.length }))} templates={data.templates} onCreate={() => void create()} onGenerate={(task) => void generate(task)} onOpenWorkflow={(id) => navigate(`/loop/${id}`)} onUseTemplate={(template: LoopTemplateItem) => void generate(`${template.title}. ${template.description}`)} />} />
-        <Route path="/loop/:workflowId" element={<Workspace data={data} onChange={changeWorkflow} onSave={save} onRunAction={runAction} onDelete={deleteWorkflow} onConfigureRun={configureRun} onIntervene={intervene} onRespondToAttention={respondToAttention} onOpenThread={(id) => navigate(`/threads/${id}`)} onDesignerMessage={sendDesignerMessage} onUndo={undo} designerSending={designerSendingId === activeWorkflow?.id} onGateDecision={gateDecision} />} />
+        <Route path="/loop/:workflowId" element={<Workspace data={data} onChange={changeWorkflow} onSave={save} onRunAction={runAction} onSimulate={simulate} onDelete={deleteWorkflow} onConfigureRun={configureRun} onIntervene={intervene} onRespondToAttention={respondToAttention} onOpenThread={(id) => navigate(`/threads/${id}`)} onDesignerMessage={sendDesignerMessage} onUndo={undo} designerSending={designerSendingId === activeWorkflow?.id} onGateDecision={gateDecision} />} />
         <Route path="/loop/:workflowId/runs/:runId" element={<RunRoute data={data} />} />
         <Route path="/threads/:threadId" element={<ThreadRoute data={data} onSend={sendInstruction} onStop={stopThread} onResolveApproval={resolveApproval} />} />
         <Route path="/threads" element={<StaticCodexScreen section="threads" />} />

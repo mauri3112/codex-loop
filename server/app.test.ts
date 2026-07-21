@@ -5,8 +5,10 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AppData, Workflow } from "../src/domain/types.js";
+import type { WorkflowSimulationReport } from "../src/domain/simulation-report.js";
 import { workflowDefinition } from "../src/domain/definition.js";
 import { createApp } from "./app.js";
+import type { CodexBridgeService } from "./codex-bridge.js";
 import { JsonWorkflowStore } from "./store.js";
 
 describe("Codex Loop API and persistence", () => {
@@ -82,6 +84,32 @@ describe("Codex Loop API and persistence", () => {
 
     const reopened = await json<Workflow>(`/api/workflows/${generated.body.id}`);
     expect(reopened.body).toEqual(generated.body);
+  });
+
+  it("simulates through the API without creating a run or changing persisted workflow state", async () => {
+    await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    const simulationBridge = {
+      listTaskCapabilities: async () => ({ source: "codex" as const, items: [
+        { id: "shell:codex", kind: "shell" as const, label: "Terminal", description: "Read-only shell probe", invocation: "Use terminal", available: true, authStatus: "verified" as const },
+      ] }),
+    } as unknown as CodexBridgeService;
+    server = createApp(store, simulationBridge).listen(0, "127.0.0.1");
+    await new Promise<void>((resolve) => server.once("listening", resolve));
+    origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    const generated = await json<Workflow>("/api/workflows/generate", { method: "POST", body: JSON.stringify({ task: "Safely preview this Loop" }) });
+    const before = await store.getWorkflow(generated.body.id);
+    const simulated = await json<WorkflowSimulationReport>(`/api/workflows/${generated.body.id}/simulate`, {
+      method: "POST",
+      body: JSON.stringify({ workingDirectory: directory }),
+    });
+    const after = await store.getWorkflow(generated.body.id);
+
+    expect(simulated.response.status).toBe(200);
+    expect(simulated.body.readOnly).toBe(true);
+    expect(simulated.body.steps).toHaveLength(generated.body.nodes.length);
+    expect(after).toEqual(before);
+    expect(after.runs).toHaveLength(before.runs.length);
   });
 
   it("creates and versions drafts, blocks invalid publication, and persists valid published workflows", async () => {

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { WorkflowStatus } from "../../domain/types";
 import { Button } from "../ui/Button";
+import { shouldSubmitComposer } from "../ui/composer-keyboard";
 import { StatusIndicator } from "../ui/StatusIndicator";
 import "./loop-landing.css";
 
@@ -136,7 +137,7 @@ export function LoopLanding({
               value={task}
               onChange={(event) => setTask(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.altKey) {
+                if (shouldSubmitComposer(event)) {
                   event.preventDefault();
                   event.currentTarget.form?.requestSubmit();
                 }

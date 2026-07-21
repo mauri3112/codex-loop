@@ -89,6 +89,7 @@ Once installed through a local Codex plugin marketplace, start a new Codex task 
 
 The split run control keeps one-time execution separate from the configured automatic trigger:
 
+- **Simulate** works for draft and saved Loops. It validates the dependency plan, previews plausible thread procedures and outputs, checks workspace readability, and probes capability/authentication status using list/status operations only. It never creates or archives a thread, runs a worker tool, changes a file, or persists a run.
 - **Run once** is always available for a saved Loop and opens a dialog for an optional one-time prompt and project folder. It does not replace a configured schedule or webhook.
 - **Scheduled run** starts automatically on selected weekdays and times in the configured IANA time zone. The server checks due schedules every 15 seconds and prevents duplicate starts within the same scheduled minute.
 - **Webhook run** exposes a tokenized `GET`/`POST` endpoint at `/api/triggers/:token`. A JSON POST body or GET query values are merged with configured defaults and made available to every Agent in that run.
@@ -102,11 +103,12 @@ In development, copy the trigger URL shown in the dialog (normally port `5173`, 
 1. Select **Loop**, describe the desired outcome, and let the Designer propose the initial graph.
 2. Continue in chat to add constraints, change integrations, or refine verification. Inspect assumptions, questions, setup requirements, and validation beside the graph preview.
 3. Select **Edit visually** only when you want direct node, edge, Context Block, or Observer controls.
-4. Save the validated revision explicitly, then run it once, schedule recurring starts, or activate a webhook trigger.
-5. Follow context creation and access grants in the Activity and Contexts panes.
-6. Watch real assistant messages, commands, MCP calls, approvals, file changes, failures, and retries stream into the workflow.
-7. Open **Implement the change** to audit its native Codex thread ID, received context, attempts, tool calls, file changes, and final output. The persisted thread is also available to other Codex clients using the same `CODEX_HOME`.
-8. Return to Loop, open a prior run from the sidebar to inspect its frozen results, then save, reload, and reopen the workflow.
+4. Select **Simulate** to inspect the staged execution preview and read-only access checks. Resolve blocking findings before real execution.
+5. Save the validated revision explicitly, then run it once, schedule recurring starts, or activate a webhook trigger.
+6. Follow context creation and access grants in the Activity and Contexts panes.
+7. Watch real assistant messages, commands, MCP calls, approvals, file changes, failures, and retries stream into the workflow.
+8. Open **Implement the change** to audit its native Codex thread ID, received context, attempts, tool calls, file changes, and final output. The persisted thread is also available to other Codex clients using the same `CODEX_HOME`.
+9. Return to Loop, open a prior run from the sidebar to inspect its frozen results, then save, reload, and reopen the workflow.
 
 Loop schedules nodes whose incoming dependencies have completed. Independent root nodes start in parallel. Pause prevents new nodes from starting, stop interrupts active Codex turns, and reset archives the native threads without deleting their stored execution results. Starting another run creates fresh native threads so outputs remain isolated by execution.
 
@@ -126,7 +128,7 @@ Loop schedules nodes whose incoming dependencies have completed. Independent roo
 
 The browser never launches Codex directly and never receives Codex credentials. Express owns the authenticated app-server subprocess and exposes narrow workflow/thread endpoints to the UI. Each Agent node is mapped to a persisted native Codex thread; `turn/start`, `turn/steer`, and `turn/interrupt` drive real work, while app-server notifications update Loop's messages, tool calls, file changes, attempts, statuses, and audit events.
 
-The deterministic simulator remains in `src/domain/simulation.ts` as a testable reference scenario, but the application Start/Stop/Continue controls now use the native bridge.
+The deterministic reference scenario remains in `src/domain/simulation.ts`. The operator-facing simulation endpoint is separate: it builds a generic, non-persisted report for the current Loop and performs only read-only workspace and capability/authentication probes. Start/Stop/Continue controls use the native bridge for real execution.
 
 ## License
 

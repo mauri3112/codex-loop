@@ -51,4 +51,4 @@
   .workspace-content.is-designer .workspace-designer-pane, .workspace-content.is-designer .workspace-canvas-pane { display: none; grid-row: 2; }
   .workspace-content.is-designer .is-mobile-active { display: block; }
 }
-@media (max-width: 520px) { .workspace-identity .workflow-state { display: none; } .workspace-controls > button:not(.run-primary):not(.intervene-control):not(:last-child) { display: none; } }
+@media (max-width: 520px) { .workspace-identity .workflow-state { display: none; } .workspace-controls > button:not(.run-primary):not(.intervene-control):not(.simulate-control):not(:last-child) { display: none; } }
