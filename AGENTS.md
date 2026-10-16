@@ -30,3 +30,7 @@
   public internet without adding authentication and TLS.
 - Do not commit `.env`, Codex credentials, workflow state, tokens, or secrets.
 
+## Solo development workflow
+
+- This is a solo developer project. Commit and push completed changes directly to `main` unless the user specifies a different branch or workflow.
+- Always have a review subagent check the changes before pushing. Address its findings and complete the relevant checks before the push.
